@@ -603,15 +603,13 @@ public function benchmarking_page() {
         <p>Valida la precisión real del modelo usando datos históricos por temporadas.</p>
         
         <!-- Ejecutar nuevo benchmark -->
+        <!-- Ejecutar Nuevo Benchmark -->
         <div class="ft-benchmark-executor" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
             <h2>🧪 Ejecutar Nuevo Benchmark</h2>
-            <form id="ft-benchmark-form">
-				<input type="hidden" id="ft_benchmark_nonce" name="benchmark_nonce" value="<?php echo wp_create_nonce('ft_nonce'); ?>">
+            <form id="ft-benchmark-form" onsubmit="return false;">
                 <table class="form-table">
                     <tr>
-                        <th scope="row">
-                            <label for="benchmark-season">Temporada de Prueba</label>
-                        </th>
+                        <th scope="row"><label for="benchmark-season">Temporada de Prueba</label></th>
                         <td>
                             <select id="benchmark-season" name="season" required>
                                 <option value="">Selecciona temporada...</option>
@@ -619,60 +617,56 @@ public function benchmarking_page() {
                                     <option value="<?php echo esc_attr($season); ?>"><?php echo esc_html($season); ?></option>
                                 <?php endforeach; ?>
                             </select>
-							<tr>
-    <th scope="row">
-        <label for="benchmark-league">Liga (Opcional)</label>
-    </th>
-    <td>
-        <select id="benchmark-league" name="league">
-            <option value="all">Todas las ligas</option>
-            <?php 
-            $benchmarking = new FT_Benchmarking();
-            $leagues = $benchmarking->get_available_leagues();
-            foreach ($leagues as $league): 
-            ?>
-                <option value="<?php echo esc_attr($league->league); ?>">
-                    <?php echo esc_html($league->league); ?> (<?php echo $league->total; ?> partidos)
-                </option>
-            <?php endforeach; ?>
-        </select>
-        <p class="description">Selecciona una liga específica para analizar</p>
-    </td>
-</tr>
-                            <p class="description">El modelo se entrenará SIN datos de esta temporada y luego la predecirá.</p>
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">
-                            <label for="model-type">Tipo de Modelo</label>
-                        </th>
+                        <th scope="row"><label for="benchmark-league">Liga (Opcional)</label></th>
+                        <td>
+                            <select id="benchmark-league" name="league">
+                                <option value="all">Todas las ligas</option>
+                                <?php 
+                                $leagues = FT_Benchmarking::get_available_leagues();
+                                foreach ($leagues as $league): ?>
+                                    <option value="<?php echo esc_attr($league->league); ?>">
+                                        <?php echo esc_html($league->league); ?> (<?php echo $league->total; ?>)
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="model-type">Tipo de Modelo</label></th>
                         <td>
                             <select id="model-type" name="model_type">
                                 <option value="with_xg">Con xG (Recomendado)</option>
                                 <option value="without_xg">Sin xG (Básico)</option>
                             </select>
-                            <p class="description">Compara modelos con y sin Expected Goals.</p>
                         </td>
                     </tr>
                 </table>
-                
                 <p class="submit">
-                    <button type="submit" class="button button-primary">
+                    <button type="button" id="ft-benchmark-btn" class="button button-primary">
                         🚀 Ejecutar Benchmark
                     </button>
                 </p>
             </form>
-            
-            <div id="ft-benchmark-progress" style="display: none;">
-                <h3>⏳ Ejecutando Benchmark...</h3>
-                <div class="ft-progress-bar">
-                    <div class="ft-progress-fill"></div>
-                </div>
-                <p id="ft-benchmark-status">Iniciando...</p>
-            </div>
-            
-            <div id="ft-benchmark-results"></div>
         </div>
+        
+        <!-- Progreso del Benchmark -->
+        <div id="ft-benchmark-progress" style="display:none; margin-top:20px;">
+            <h3>⏳ Ejecutando Benchmark...</h3>
+            <div class="ft-progress-bar">
+                <div class="ft-progress-fill"></div>
+            </div>
+            <p id="ft-benchmark-status">Iniciando...</p>
+        </div>
+        
+        <!-- Resultados -->
+        <div id="ft-benchmark-results" style="margin-top:20px;"></div>
+        
+        <?php
+        // FIN del bloque de Benchmarking; ELIMINA cualquier <script> inline que hubiera aquí
+        ?>
         
         <!-- Historial de benchmarks -->
         <div class="ft-benchmark-history" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
@@ -894,82 +888,63 @@ public function benchmarking_page() {
     </style>
     
 	<script>
-	jQuery(document).ready(function($) {
-    $('#ft-benchmark-form').on('submit', function(e) {
-    e.preventDefault();
-	console.log('EVENTO SUBMIT DISPARADO');	
-    
-    const season = $('#benchmark-season').val();
-    const modelType = $('#model-type').val();
-    const league = $('#benchmark-league').val() || 'all';  // NUEVO: Capturar valor liga
-    
-    if (!season) {
-        alert('Por favor selecciona una temporada');
-        return;
-    }
-    
-    console.log('Ejecutando benchmark:', {season, modelType, league}); // DEBUG
-    
-    // Mostrar progreso
-    $('#ft-benchmark-progress').show();
-    $('#ft-benchmark-results').hide();
-    
-    // Simular progreso
-    let progress = 0;
-    const progressInterval = setInterval(() => {
-        progress += Math.random() * 15;
-        if (progress > 90) progress = 90;
+	jQuery(function($) {
+    $('#ft-benchmark-btn').on('click', function(e) {
+        // limpiar mensajes previos
+        $('#ft-benchmark-results, #ft-benchmark-progress').hide();
+        $('.ft-progress-fill').css('width','0%');
         
-        $('.ft-progress-fill').css('width', progress + '%');
-        
-        if (progress < 30) {
-            $('#ft-benchmark-status').text('Cargando datos históricos...');
-        } else if (progress < 60) {
-            $('#ft-benchmark-status').text('Entrenando modelo sin temporada ' + season + '...');
-        } else if (progress < 90) {
-            $('#ft-benchmark-status').text('Ejecutando predicciones...');
+        // leer inputs
+        const season = $('#benchmark-season').val();
+        const modelType = $('#model-type').val();
+        const league = $('#benchmark-league').val() || 'all';
+        if (!season) {
+            alert('Selecciona una temporada');
+            return;
         }
-    }, 500);
-    
-    // Ejecutar benchmark
-    $.ajax({
-        url: ajaxurl,
-        type: 'POST',
-        data: {
-            action: 'ft_run_benchmark',
-            nonce: jQuery('#ft_benchmark_nonce').val(),
-            season: season,
-            model_type: modelType,
-            league: league  // NUEVO: Enviar parámetro liga
-        },
-        timeout: 300000, // 5 minutos
-        success: function(response) {
-            clearInterval(progressInterval);
-            $('.ft-progress-fill').css('width', '100%');
-            $('#ft-benchmark-status').text('Completado!');
-            
-            if (response.success) {
-                displayBenchmarkResults(response.data);
-            } else {
-                $('#ft-benchmark-results').html(
-                    '<div class="notice notice-error"><p>❌ Error: ' + response.data + '</p></div>'
-                ).show();
-            }
-            
-            setTimeout(() => {
-                $('#ft-benchmark-progress').hide();
-            }, 2000);
-        },
-        error: function(xhr, status, error) {
+        
+        // mostrar progreso
+        $('#ft-benchmark-progress').show();
+        let progress = 0;
+        const progressInterval = setInterval(function(){
+            progress = Math.min( progress + Math.random()*15, 90 );
+            $('.ft-progress-fill').css('width', progress+'%');
+        }, 500);
+        
+        // AJAX
+        $.ajax({
+            url: ft_admin_ajax.ajax_url,
+            type: 'POST',
+            data: {
+                action: 'ft_run_benchmark',
+                season: season,
+                model_type: modelType,
+                league: league
+            },
+            timeout: 300000,
+            success: function(resp) {
+                clearInterval(progressInterval);
+                $('.ft-progress-fill').css('width','100%');
+                $('#ft-benchmark-status').text('Completado!');
+                
+                if (resp.success) {
+                    displayBenchmarkResults(resp.data);
+                } else {
+                    $('#ft-benchmark-results')
+                      .html('<div class="notice notice-error"><p>❌ '+resp.data+'</p></div>')
+                      .show();
+                }
+                setTimeout(()=>$('#ft-benchmark-progress').hide(),2000);
+            },
+            error: function(xhr, status, err) {
                 clearInterval(progressInterval);
                 $('#ft-benchmark-progress').hide();
-                var msg = xhr.responseJSON && xhr.responseJSON.data
-                          ? xhr.responseJSON.data
-                          : error;
-                $('#ft-benchmark-results').html(
-                    '<div class="notice notice-error"><p>❌ Falló Benchmark: ' + msg + '</p></div>'
-                ).show();
+                const msg = xhr.responseJSON?.data || err;
+                $('#ft-benchmark-results')
+                  .html('<div class="notice notice-error"><p>❌ Benchmark error: '+msg+'</p></div>')
+                  .show();
             }
+        });
     });
 });
         
@@ -4480,25 +4455,21 @@ add_action('wp_ajax_ft_get_pinnacle_leagues', function() {
     wp_send_json_success($out);
 });
 
-add_action('wp_ajax_ft_run_benchmark', function() {
-    // 1) No forzamos form POST, es AJAX puro
+add_action('wp_ajax_ft_run_benchmark', function(){
     if (! current_user_can('manage_options')) {
-        wp_send_json_error('No tienes permisos.');
+        wp_send_json_error('Sin permisos.');
     }
-    
-    // 2) Leer parámetros y sanear
+
     $season     = sanitize_text_field($_POST['season'] ?? '');
     $model_type = sanitize_text_field($_POST['model_type'] ?? '');
     $league     = sanitize_text_field($_POST['league'] ?? 'all');
 
-    if (! $season || ! in_array($model_type, ['with_xg','without_xg'])) {
+    if (! $season || ! in_array($model_type, ['with_xg','without_xg'], true)) {
         wp_send_json_error('Parámetros inválidos.');
     }
 
     try {
-        if (! class_exists('FT_Benchmarking')) {
-            require_once FT_PLUGIN_PATH . 'includes/class-benchmarking.php';
-        }
+        require_once FT_PLUGIN_PATH . 'includes/class-benchmarking.php';
         $bench = new FT_Benchmarking();
         $result = $bench->run_season_benchmark($season, $model_type, $league);
 
@@ -4507,9 +4478,8 @@ add_action('wp_ajax_ft_run_benchmark', function() {
         }
         wp_send_json_success($result);
 
-    } catch (\Throwable $e) {
-        // 3) Volcar al log de WP para que no sea “pantalla en blanco”
-        error_log("FT BENCHMARK ERROR: {$e->getMessage()} en {$e->getFile()}:{$e->getLine()}");
+    } catch (Throwable $e) {
+        error_log('FT BENCHMARK ERROR: '.$e->getMessage());
         wp_send_json_error('Error interno. Revisa debug.log');
     }
 });
