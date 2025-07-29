@@ -961,12 +961,15 @@ public function benchmarking_page() {
             }, 2000);
         },
         error: function(xhr, status, error) {
-            clearInterval(progressInterval);
-            $('#ft-benchmark-progress').hide();
-            $('#ft-benchmark-results').html(
-                '<div class="notice notice-error"><p>❌ Error de conexión: ' + error + '</p></div>'
-            ).show();
-        }
+                clearInterval(progressInterval);
+                $('#ft-benchmark-progress').hide();
+                var msg = xhr.responseJSON && xhr.responseJSON.data
+                          ? xhr.responseJSON.data
+                          : error;
+                $('#ft-benchmark-results').html(
+                    '<div class="notice notice-error"><p>❌ Falló Benchmark: ' + msg + '</p></div>'
+                ).show();
+            }
     });
 });
         
@@ -2011,46 +2014,55 @@ jQuery(function($){
     });
 });
 </script>
-  <!-- Script para cargar dinámicamente las ligas de Pinnacle -->
-    <script>
-    jQuery(document).ready(function($){
-        var $sel = $('#pinnacle_leagues_select');
-        if (!$sel.length) {
-            return;
+ <?php // =================== INICIO script ligas Pinnacle =================== ?>
+<script type="text/javascript">
+jQuery(function($){
+    // 1) Localizamos el select
+    var $sel = $('#pinnacle_leagues_select');
+    if (! $sel.length) {
+        return;
+    }
+
+    // 2) Usamos los valores localizados por wp_localize_script()
+    var ajax_url = ft_admin_ajax.ajax_url;
+    var nonce    = ft_admin_ajax.nonce;
+
+    // 3) Pedimos ligas a WP via admin-ajax
+    $.post(ajax_url, {
+        action: 'ft_get_pinnacle_leagues',
+        nonce:  nonce
+    })
+    .done(function(resp){
+        if (resp.success) {
+            // 4) Marcar las ya guardadas (hidden input)
+            var current = ($('#pinnacle_leagues').val()||'').split(',').filter(Boolean);
+
+            // 5) Poblar el select
+            $.each(resp.data, function(i, league){
+                var $opt = $('<option>')
+                             .val(league.id)
+                             .text(league.name);
+                if ( current.indexOf(String(league.id)) !== -1 ) {
+                    $opt.prop('selected', true);
+                }
+                $sel.append($opt);
+            });
+        } else {
+            console.error('FT: error al cargar ligas Pinnacle:', resp.data);
         }
-        // Obtener ligas vía AJAX
-        $.post(ajaxurl, {
-            action: 'ft_get_pinnacle_leagues',
-            nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>'
-        }, function(resp){
-            if (resp.success) {
-                // Valores previamente guardados
-                var current = $('#pinnacle_leagues').val().split(',').filter(Boolean);
-                // Poblar opciones
-                $.each(resp.data, function(i, league){
-                    var $opt = $('<option>')
-                                .val(league.id)
-                                .text(league.name);
-                    if (current.indexOf(String(league.id)) !== -1) {
-                        $opt.prop('selected', true);
-                    }
-                    $sel.append($opt);
-                });
-            } else {
-                console.error('Error cargando ligas Pinnacle:', resp.data);
-            }
-        }).fail(function(xhr, status, err){
-            console.error('AJAX ft_get_pinnacle_leagues fallo:', status, err);
-        });
-
-        // Al cambiar, volcamos la selección al hidden
-        $sel.on('change', function(){
-            var vals = $(this).val() || [];
-            $('#pinnacle_leagues').val(vals.join(','));
-        });
+    })
+    .fail(function(xhr, status, err){
+        console.error('FT: AJAX ft_get_pinnacle_leagues falló:', status, err);
     });
-    </script>
 
+    // 6) Al cambiar la selección, volcamos al hidden
+    $sel.on('change', function(){
+        var vals = $(this).val()||[];
+        $('#pinnacle_leagues').val(vals.join(','));
+    });
+});
+</script>
+<?php // ==================== FIN script ligas Pinnacle ==================== ?>
         <!-- Configuración de Value Betting -->
         <div class="ft-value-config" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px;">
             <h2>💰 Configuración Value Betting</h2>
@@ -4439,73 +4451,66 @@ add_action('wp_ajax_ft_import_csv_url', function() {
 });
 
 add_action('wp_ajax_ft_get_pinnacle_leagues', function() {
-    check_ajax_referer('ft_nonce', 'nonce');
+    check_ajax_referer('ft_nonce','nonce');
     if (!current_user_can('manage_options')) {
-        wp_send_json_error('No tienes permisos.');
+        wp_send_json_error('Sin permisos.');
     }
 
     require_once FT_PLUGIN_PATH . 'includes/class-pinnacle-api.php';
-
-    $username = get_option('ft_pinnacle_username');
-    $password = get_option('ft_pinnacle_password');
-    if (! $username || ! $password) {
-        wp_send_json_error('Faltan credenciales en configuración de Pinnacle.');
+    $user = get_option('ft_pinnacle_username');
+    $pass = get_option('ft_pinnacle_password');
+    if (empty($user) || empty($pass)) {
+        wp_send_json_error('Faltan credenciales de Pinnacle en Ajustes.');
     }
 
-    $api = new FT_Pinnacle_API($username, $password);
+    $api = new FT_Pinnacle_API($user, $pass);
     $leagues = $api->get_leagues();
 
-    // Normalizar respuesta
+    // Normalizar el array de salida
     $out = [];
     foreach ($leagues as $l) {
-        $out[] = [
-            'id'   => $l['id'],
-            'name' => $l['name'],
-        ];
+        // adapta estos campos si tu API devuelve otros nombres
+        $id   = isset($l->id)   ? $l->id   : ($l['id']   ?? null);
+        $name = isset($l->name) ? $l->name : ($l['name'] ?? null);
+        if ($id && $name) {
+            $out[] = ['id'=> $id, 'name'=> $name];
+        }
     }
 
     wp_send_json_success($out);
 });
 
 add_action('wp_ajax_ft_run_benchmark', function() {
-    check_ajax_referer('ft_nonce', 'nonce');
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Sin permisos');
+    // 1) No forzamos form POST, es AJAX puro
+    if (! current_user_can('manage_options')) {
+        wp_send_json_error('No tienes permisos.');
     }
     
-    $season = sanitize_text_field($_POST['season']);
-    $model_type = sanitize_text_field($_POST['model_type']);
-    $league = sanitize_text_field($_POST['league'] ?? 'all');  // CORREGIDO: Ya estaba bien
+    // 2) Leer parámetros y sanear
+    $season     = sanitize_text_field($_POST['season'] ?? '');
+    $model_type = sanitize_text_field($_POST['model_type'] ?? '');
+    $league     = sanitize_text_field($_POST['league'] ?? 'all');
 
-    error_log('FT Benchmark: Iniciando para temporada ' . $season . ' liga ' . $league);
-    
-    if (!$season || !in_array($model_type, ['with_xg', 'without_xg'])) {
-        wp_send_json_error('Parámetros inválidos');
+    if (! $season || ! in_array($model_type, ['with_xg','without_xg'])) {
+        wp_send_json_error('Parámetros inválidos.');
     }
-    
+
     try {
-        // Aumentar límites para el benchmark
-        ini_set('memory_limit', '1G');
-        ini_set('max_execution_time', 600);
-        
-        if (!class_exists('FT_Benchmarking')) {
+        if (! class_exists('FT_Benchmarking')) {
             require_once FT_PLUGIN_PATH . 'includes/class-benchmarking.php';
         }
-        
-        $benchmarking = new FT_Benchmarking();
-        
-        // CORRECCIÓN: Pasar los 3 parámetros correctamente
-        $result = $benchmarking->run_season_benchmark($season, $model_type, $league);
-      
+        $bench = new FT_Benchmarking();
+        $result = $bench->run_season_benchmark($season, $model_type, $league);
+
         if (isset($result['error'])) {
             wp_send_json_error($result['error']);
-        } else {
-            wp_send_json_success($result);
         }
-        
-    } catch (Exception $e) {
-        error_log('FT Benchmark Error: ' . $e->getMessage());
-        wp_send_json_error('Error: ' . $e->getMessage());
+        wp_send_json_success($result);
+
+    } catch (\Throwable $e) {
+        // 3) Volcar al log de WP para que no sea “pantalla en blanco”
+        error_log("FT BENCHMARK ERROR: {$e->getMessage()} en {$e->getFile()}:{$e->getLine()}");
+        wp_send_json_error('Error interno. Revisa debug.log');
     }
 });
 // AJAX handler para obtener detalles de benchmark
