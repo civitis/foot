@@ -1,0 +1,148 @@
+<?php
+class FT_Ajax_Handlers {
+    
+    public static function init() {
+        // Obtener equipos
+        add_action('wp_ajax_ft_get_teams', array(__CLASS__, 'get_teams'));
+        add_action('wp_ajax_nopriv_ft_get_teams', array(__CLASS__, 'get_teams'));
+        
+        // Entrenar modelo
+        add_action('wp_ajax_ft_train_model', array(__CLASS__, 'train_model'));
+        
+        // Importar CSV
+        add_action('wp_ajax_ft_import_csv', array(__CLASS__, 'import_csv'));
+        
+        // Actualizar xG
+        add_action('wp_ajax_ft_update_xg', array(__CLASS__, 'update_xg'));
+    }
+    
+    /**
+     * Obtiene lista de equipos disponibles
+     */
+    public static function get_teams() {
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        global $wpdb;
+        $table = $wpdb->prefix . 'ft_matches_advanced';
+        
+        $teams = $wpdb->get_col(
+            "SELECT DISTINCT home_team FROM $table 
+             WHERE home_team IS NOT NULL 
+             UNION 
+             SELECT DISTINCT away_team FROM $table 
+             WHERE away_team IS NOT NULL 
+             ORDER BY home_team"
+        );
+        
+        wp_send_json_success($teams);
+    }
+    
+    /**
+     * Entrena el modelo Random Forest
+     */
+    public static function train_model() {
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+        
+        // Obtener configuración de base de datos de wp-config.php
+        $db_config = array(
+            'host' => DB_HOST,
+            'user' => DB_USER,
+            'password' => DB_PASSWORD,
+            'database' => DB_NAME
+        );
+        
+        // Crear archivo temporal con configuración
+        $config_file = FT_PYTHON_PATH . 'db_config.json';
+        file_put_contents($config_file, json_encode($db_config));
+        
+        // Ejecutar script Python
+        $python_script = FT_PYTHON_PATH . 'train_model_advanced.py';
+        $command = escapeshellcmd("cd " . FT_PYTHON_PATH . " && python3 $python_script 2>&1");
+        
+        $output = shell_exec($command);
+        
+        // Eliminar archivo de configuración temporal
+        unlink($config_file);
+        
+        if ($output) {
+            // Parsear salida para obtener métricas
+            preg_match('/Precisión: ([\d.]+)%/', $output, $matches);
+            $accuracy = isset($matches[1]) ? floatval($matches[1]) / 100 : 0;
+            
+            // Leer metadatos del modelo
+            $metadata_file = FT_PLUGIN_PATH . 'models/model_metadata.json';
+            $metadata = file_exists($metadata_file) ? json_decode(file_get_contents($metadata_file), true) : array();
+            
+            wp_send_json_success(array(
+                'accuracy' => $accuracy,
+                'features' => $metadata['features'] ?? array(),
+                'output' => $output
+            ));
+        } else {
+            wp_send_json_error('Error al entrenar el modelo');
+        }
+    }
+    
+    /**
+     * Importa datos desde CSV
+     */
+    public static function import_csv() {
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+        
+        if (!isset($_FILES['csv_file'])) {
+            wp_send_json_error('No se recibió ningún archivo');
+        }
+        
+        $uploaded_file = $_FILES['csv_file'];
+        
+        // Validar tipo de archivo
+        $file_type = wp_check_filetype($uploaded_file['name']);
+        if ($file_type['ext'] !== 'csv') {
+            wp_send_json_error('Solo se permiten archivos CSV');
+        }
+        
+        // Procesar CSV
+        require_once FT_PLUGIN_PATH . 'includes/class-csv-importer.php';
+        
+        $importer = new FT_CSV_Importer($uploaded_file['tmp_name']);
+        $result = $importer->import_from_file();
+        
+        if ($result['success']) {
+            // Actualizar estadísticas de equipos
+            FT_Predictor::update_team_stats();
+            
+            wp_send_json_success('Datos importados exitosamente');
+        } else {
+            wp_send_json_error($result['error']);
+        }
+    }
+    
+    /**
+     * Actualiza xG desde FBref
+     */
+    public static function update_xg() {
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Permisos insuficientes');
+        }
+        
+        require_once FT_PLUGIN_PATH . 'includes/class-xg-scraper.php';
+        
+        $scraper = new FT_XG_Scraper();
+        $updated = $scraper->update_missing_xg(20); // Actualizar 20 partidos
+        
+        wp_send_json_success(array('updated' => $updated));
+    }
+}
+
+// Inicializar handlers AJAX
+FT_Ajax_Handlers::init();

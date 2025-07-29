@@ -1,0 +1,573 @@
+<?php
+/**
+ * Manejadores AJAX para Football Tipster
+ * 
+ * @package Football_Tipster
+ */
+
+// Evitar acceso directo
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+/**
+ * Clase para manejar todas las peticiones AJAX
+ */
+class FT_Ajax_Handlers {
+    
+    /**
+     * Inicializar handlers
+     */
+    public static function init() {
+        // Handlers públicos (no requieren login)
+        add_action('wp_ajax_nopriv_ft_get_teams', array(__CLASS__, 'get_teams'));
+        add_action('wp_ajax_ft_get_teams', array(__CLASS__, 'get_teams'));
+        
+        add_action('wp_ajax_nopriv_ft_predict_match', array(__CLASS__, 'predict_match'));
+        add_action('wp_ajax_ft_predict_match', array(__CLASS__, 'predict_match'));
+        
+        // Handlers admin (requieren login)
+        add_action('wp_ajax_ft_train_model', array(__CLASS__, 'train_model'));
+        add_action('wp_ajax_ft_update_xg', array(__CLASS__, 'update_xg'));
+        add_action('wp_ajax_ft_import_csv', array(__CLASS__, 'import_csv'));
+        add_action('wp_ajax_ft_import_csv_url', array(__CLASS__, 'import_csv_url'));
+        add_action('wp_ajax_ft_update_stats', array(__CLASS__, 'update_stats'));
+        add_action('wp_ajax_ft_get_prediction_history', array(__CLASS__, 'get_prediction_history'));
+        add_action('wp_ajax_ft_get_model_performance', array(__CLASS__, 'get_model_performance'));
+    }
+    
+    /**
+     * Obtener lista de equipos
+     */
+    public static function get_teams() {
+        try {
+            $league = isset($_POST['league']) ? sanitize_text_field($_POST['league']) : 'all';
+            $sport = isset($_POST['sport']) ? sanitize_text_field($_POST['sport']) : 'football';
+            
+            global $wpdb;
+            $table = $wpdb->prefix . 'ft_matches_advanced';
+            
+            $where_clauses = array("sport = %s");
+            $params = array($sport);
+            
+            if ($league !== 'all') {
+                $where_clauses[] = "division = %s";
+                $params[] = $league;
+            }
+            
+            $where_sql = implode(' AND ', $where_clauses);
+            
+            // Obtener equipos únicos
+            $sql = "SELECT DISTINCT home_team as team FROM $table WHERE $where_sql 
+                    UNION 
+                    SELECT DISTINCT away_team as team FROM $table WHERE $where_sql 
+                    ORDER BY team";
+            
+            $teams = $wpdb->get_col($wpdb->prepare($sql, array_merge($params, $params)));
+            
+            wp_send_json_success(array(
+                'teams' => $teams,
+                'count' => count($teams)
+            ));
+            
+        } catch (Exception $e) {
+            wp_send_json_error('Error al obtener equipos: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Handler para predicción de partidos
+     */
+    public static function predict_match() {
+        try {
+            // Verificar nonce para usuarios logueados
+            if (is_user_logged_in() && !wp_verify_nonce($_POST['nonce'], 'ft_nonce')) {
+                wp_send_json_error('Error de seguridad');
+                return;
+            }
+            
+            $home_team = sanitize_text_field($_POST['home_team']);
+            $away_team = sanitize_text_field($_POST['away_team']);
+            $sport = isset($_POST['sport']) ? sanitize_text_field($_POST['sport']) : 'football';
+            
+            if (empty($home_team) || empty($away_team)) {
+                wp_send_json_error('Selecciona ambos equipos');
+                return;
+            }
+            
+            if ($home_team === $away_team) {
+                wp_send_json_error('Selecciona equipos diferentes');
+                return;
+            }
+            
+            // Realizar predicción
+            $predictor = new FT_Predictor();
+            $result = $predictor->predict_match($home_team, $away_team, $sport);
+            
+            if (isset($result['error'])) {
+                wp_send_json_error($result['error']);
+                return;
+            }
+            
+            // Formatear respuesta
+            $response = array(
+                'prediction' => $result['prediction'],
+                'probabilities' => $result['probabilities'],
+                'confidence' => $result['confidence'],
+                'features' => $result['features'] ?? array(),
+                'stats' => array(
+                    'home' => $result['home_stats'] ?? array(),
+                    'away' => $result['away_stats'] ?? array()
+                ),
+                'html' => self::generate_prediction_html($result, $home_team, $away_team)
+            );
+            
+            wp_send_json_success($response);
+            
+        } catch (Exception $e) {
+            error_log('FT Prediction Error: ' . $e->getMessage());
+            wp_send_json_error('Error en la predicción: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Entrenar modelo (solo admin)
+     */
+    public static function train_model() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            // Configurar límites
+            ini_set('memory_limit', '1G');
+            ini_set('max_execution_time', 600);
+            
+            // Crear configuración de BD
+            $db_config = array(
+                'host' => DB_HOST,
+                'user' => DB_USER,
+                'password' => DB_PASSWORD,
+                'database' => DB_NAME,
+                'port' => 3306
+            );
+            
+            // Extraer puerto si está en el host
+            if (strpos(DB_HOST, ':') !== false) {
+                list($host, $port) = explode(':', DB_HOST, 2);
+                $db_config['host'] = $host;
+                $db_config['port'] = intval($port);
+            }
+            
+            $config_file = FT_PYTHON_PATH . 'db_config_temp.json';
+            file_put_contents($config_file, json_encode($db_config));
+            
+            // Ejecutar script Python
+            $python_script = FT_PYTHON_PATH . 'train_model_advanced.py';
+            $command = "cd " . FT_PYTHON_PATH . " && /usr/bin/python3.8 " . $python_script . " 2>&1";
+            
+            error_log('FT: Ejecutando comando: ' . $command);
+            
+            $output = shell_exec($command);
+            
+            // Limpiar archivo temporal
+            if (file_exists($config_file)) {
+                unlink($config_file);
+            }
+            
+            error_log('FT: Output entrenamiento: ' . $output);
+            
+            // Analizar resultado
+            if (strpos($output, 'completado') !== false || strpos($output, 'successfully') !== false) {
+                // Obtener precisión del output
+                preg_match('/accuracy[:\s]+([\d.]+)/', $output, $matches);
+                $accuracy = isset($matches[1]) ? floatval($matches[1]) : 0;
+                
+                wp_send_json_success(array(
+                    'message' => 'Modelo entrenado exitosamente',
+                    'accuracy' => $accuracy,
+                    'output' => nl2br(htmlspecialchars($output))
+                ));
+            } else {
+                wp_send_json_error('Error en entrenamiento: ' . $output);
+            }
+            
+        } catch (Exception $e) {
+            error_log('FT Train Error: ' . $e->getMessage());
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Actualizar Expected Goals
+     */
+    public static function update_xg() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            // Usar calculadora de xG propia
+            if (!class_exists('FootballTipster_xG_Calculator')) {
+                require_once FT_PLUGIN_PATH . 'includes/class-xg-calculator.php';
+            }
+            
+            $calculator = new FootballTipster_xG_Calculator();
+            $updated = $calculator->update_missing_xG();
+            
+            // También intentar scraping si está disponible
+            $scraped = 0;
+            if (class_exists('FT_XG_Scraper')) {
+                $scraper = new FT_XG_Scraper();
+                $scraped = $scraper->update_missing_xg();
+            }
+            
+            $total = $updated + $scraped;
+            
+            wp_send_json_success(array(
+                'message' => sprintf('xG actualizado para %d partidos', $total),
+                'calculated' => $updated,
+                'scraped' => $scraped
+            ));
+            
+        } catch (Exception $e) {
+            error_log('FT xG Error: ' . $e->getMessage());
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Importar CSV
+     */
+    public static function import_csv() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            if (!isset($_FILES['csv_file'])) {
+                wp_send_json_error('No se recibió archivo');
+                return;
+            }
+            
+            $uploaded_file = $_FILES['csv_file'];
+            
+            // Validar tipo de archivo
+            $file_type = wp_check_filetype($uploaded_file['name']);
+            if ($file_type['ext'] !== 'csv') {
+                wp_send_json_error('Solo se permiten archivos CSV');
+                return;
+            }
+            
+            // Importar
+            $importer = new FT_CSV_Importer();
+            $result = $importer->import_from_file($uploaded_file['tmp_name']);
+            
+            if ($result['success']) {
+                wp_send_json_success($result['message']);
+            } else {
+                wp_send_json_error($result['error']);
+            }
+            
+        } catch (Exception $e) {
+            error_log('FT Import Error: ' . $e->getMessage());
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Importar CSV desde URL
+     */
+    public static function import_csv_url() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            $csv_url = sanitize_url($_POST['csv_url']);
+            
+            if (empty($csv_url) || !filter_var($csv_url, FILTER_VALIDATE_URL)) {
+                wp_send_json_error('URL no válida');
+                return;
+            }
+            
+            // Importar
+            $importer = new FT_CSV_Importer();
+            $result = $importer->import_from_url($csv_url);
+            
+            if ($result['success']) {
+                wp_send_json_success($result['message']);
+            } else {
+                wp_send_json_error($result['error']);
+            }
+            
+        } catch (Exception $e) {
+            error_log('FT Import URL Error: ' . $e->getMessage());
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Actualizar estadísticas de equipos
+     */
+    public static function update_stats() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            // Actualizar estadísticas agregadas
+            FT_Predictor::update_team_stats();
+            
+            wp_send_json_success('Estadísticas actualizadas correctamente');
+            
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Obtener historial de predicciones
+     */
+    public static function get_prediction_history() {
+        try {
+            global $wpdb;
+            
+            $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 20;
+            $page = isset($_POST['page']) ? intval($_POST['page']) : 1;
+            $offset = ($page - 1) * $limit;
+            
+            $table = $wpdb->prefix . 'ft_predictions';
+            
+            // Obtener predicciones
+            $predictions = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM $table 
+                 ORDER BY predicted_at DESC 
+                 LIMIT %d OFFSET %d",
+                $limit,
+                $offset
+            ));
+            
+            // Obtener total
+            $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
+            
+            // Calcular estadísticas
+            $stats = $wpdb->get_row(
+                "SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct,
+                    AVG(probability) as avg_confidence
+                 FROM $table 
+                 WHERE actual_result IS NOT NULL"
+            );
+            
+            $response = array(
+                'predictions' => $predictions,
+                'pagination' => array(
+                    'total' => $total,
+                    'page' => $page,
+                    'pages' => ceil($total / $limit),
+                    'limit' => $limit
+                ),
+                'stats' => array(
+                    'total' => $stats->total,
+                    'correct' => $stats->correct,
+                    'accuracy' => $stats->total > 0 ? ($stats->correct / $stats->total) : 0,
+                    'avg_confidence' => floatval($stats->avg_confidence)
+                )
+            );
+            
+            wp_send_json_success($response);
+            
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Obtener rendimiento del modelo
+     */
+    public static function get_model_performance() {
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('Sin permisos');
+            return;
+        }
+        
+        check_ajax_referer('ft_nonce', 'nonce');
+        
+        try {
+            global $wpdb;
+            
+            // Obtener métricas del modelo
+            $metadata_file = FT_MODELS_PATH . 'model_metadata.json';
+            $model_info = array();
+            
+            if (file_exists($metadata_file)) {
+                $model_info = json_decode(file_get_contents($metadata_file), true);
+            }
+            
+            // Estadísticas de predicciones
+            $pred_table = $wpdb->prefix . 'ft_predictions';
+            
+            $performance = $wpdb->get_results(
+                "SELECT 
+                    prediction,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct,
+                    AVG(probability) as avg_confidence
+                 FROM $pred_table 
+                 WHERE actual_result IS NOT NULL
+                 GROUP BY prediction"
+            );
+            
+            // Estadísticas por periodo
+            $monthly_stats = $wpdb->get_results(
+                "SELECT 
+                    DATE_FORMAT(predicted_at, '%Y-%m') as month,
+                    COUNT(*) as total,
+                    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+                 FROM $pred_table 
+                 WHERE actual_result IS NOT NULL
+                 GROUP BY month
+                 ORDER BY month DESC
+                 LIMIT 12"
+            );
+            
+            $response = array(
+                'model_info' => $model_info,
+                'performance_by_type' => $performance,
+                'monthly_stats' => $monthly_stats,
+                'last_update' => get_option('ft_last_model_training', 'Nunca')
+            );
+            
+            wp_send_json_success($response);
+            
+        } catch (Exception $e) {
+            wp_send_json_error('Error: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Generar HTML para resultado de predicción
+     */
+    private static function generate_prediction_html($result, $home_team, $away_team) {
+        $prediction_labels = array(
+            'H' => 'Victoria Local',
+            'D' => 'Empate',
+            'A' => 'Victoria Visitante'
+        );
+        
+        $html = '<div class="ft-prediction-result">';
+        $html .= '<h3>' . esc_html($home_team) . ' vs ' . esc_html($away_team) . '</h3>';
+        
+        // Predicción principal
+        $html .= '<div class="ft-main-prediction">';
+        $html .= '<span class="ft-label">Predicción:</span> ';
+        $html .= '<strong class="ft-prediction-' . strtolower($result['prediction']) . '">';
+        $html .= $prediction_labels[$result['prediction']] ?? $result['prediction'];
+        $html .= '</strong>';
+        $html .= ' <span class="ft-confidence">(' . round($result['confidence'] * 100) . '% confianza)</span>';
+        $html .= '</div>';
+        
+        // Probabilidades
+        $html .= '<div class="ft-probabilities">';
+        $html .= '<h4>Probabilidades:</h4>';
+        $html .= '<div class="ft-prob-bars">';
+        
+        $probs = $result['probabilities'];
+        foreach (array('home_win' => 'H', 'draw' => 'D', 'away_win' => 'A') as $key => $label) {
+            $prob = isset($probs[$key]) ? $probs[$key] : 0;
+            $percentage = round($prob * 100);
+            
+            $html .= '<div class="ft-prob-item">';
+            $html .= '<span class="ft-prob-label">' . $prediction_labels[$label] . ':</span>';
+            $html .= '<div class="ft-prob-bar">';
+            $html .= '<div class="ft-prob-fill" style="width: ' . $percentage . '%"></div>';
+            $html .= '<span class="ft-prob-value">' . $percentage . '%</span>';
+            $html .= '</div>';
+            $html .= '</div>';
+        }
+        
+        $html .= '</div>';
+        $html .= '</div>';
+        
+        // Estadísticas de equipos
+        if (isset($result['stats'])) {
+            $html .= '<div class="ft-team-stats">';
+            $html .= '<h4>Estadísticas:</h4>';
+            $html .= '<div class="ft-stats-comparison">';
+            
+            // Stats del equipo local
+            $html .= '<div class="ft-team-home">';
+            $html .= '<h5>' . esc_html($home_team) . '</h5>';
+            if (isset($result['stats']['home'])) {
+                $html .= self::format_team_stats($result['stats']['home']);
+            }
+            $html .= '</div>';
+            
+            // Stats del equipo visitante
+            $html .= '<div class="ft-team-away">';
+            $html .= '<h5>' . esc_html($away_team) . '</h5>';
+            if (isset($result['stats']['away'])) {
+                $html .= self::format_team_stats($result['stats']['away']);
+            }
+            $html .= '</div>';
+            
+            $html .= '</div>';
+            $html .= '</div>';
+        }
+        
+        $html .= '</div>';
+        
+        return $html;
+    }
+    
+    /**
+     * Formatear estadísticas de equipo
+     */
+    private static function format_team_stats($stats) {
+        $html = '<ul class="ft-stats-list">';
+        
+        if (isset($stats['total_matches'])) {
+            $html .= '<li>Partidos: ' . $stats['total_matches'] . '</li>';
+        }
+        
+        if (isset($stats['avg_goals_for'])) {
+            $html .= '<li>Goles favor: ' . round($stats['avg_goals_for'], 1) . '</li>';
+        }
+        
+        if (isset($stats['avg_goals_against'])) {
+            $html .= '<li>Goles contra: ' . round($stats['avg_goals_against'], 1) . '</li>';
+        }
+        
+        if (isset($stats['home_form']) && is_array($stats['home_form'])) {
+            $html .= '<li>Forma local: ' . $stats['home_form']['form_string'] . '</li>';
+        }
+        
+        if (isset($stats['away_form']) && is_array($stats['away_form'])) {
+            $html .= '<li>Forma visitante: ' . $stats['away_form']['form_string'] . '</li>';
+        }
+        
+        $html .= '</ul>';
+        
+        return $html;
+    }
+}
+
+// Registrar los handlers
+add_action('init', array('FT_Ajax_Handlers', 'init'));
