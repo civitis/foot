@@ -1965,7 +1965,92 @@ public function sync_page() {
                 </p>
             </form>
         </div>
-        
+        <?php // Después de </div> que cierra el ft-pinnacle-config ?>
+<script type="text/javascript">
+jQuery(function($){
+    var $sel = $('#pinnacle_leagues_select');
+    if ( ! $sel.length ) {
+        return;
+    }
+
+    // URL AJAX y nonce limpiamente
+    var ajax_url = '<?php echo admin_url("admin-ajax.php"); ?>';
+    var nonce    = '<?php echo wp_create_nonce("ft_nonce"); ?>';
+
+    // Pedir ligas a WP
+    $.post(ajax_url, {
+        action: 'ft_get_pinnacle_leagues',
+        nonce:  nonce
+    })
+    .done(function(resp){
+        if ( resp.success ) {
+            // Ligas ya guardadas (hidden)
+            var current = ($('#pinnacle_leagues').val() || '').split(',').filter(Boolean);
+            // Poblar el select
+            $.each(resp.data, function(i, league){
+                var $opt = $('<option/>')
+                            .val(league.id)
+                            .text(league.name);
+                if ( current.indexOf(String(league.id)) !== -1 ) {
+                    $opt.prop('selected', true);
+                }
+                $sel.append($opt);
+            });
+        } else {
+            console.error('Error ft_get_pinnacle_leagues:', resp.data);
+        }
+    })
+    .fail(function(xhr, status, err){
+        console.error('AJAX fallo:', status, err);
+    });
+
+    // Al cambiar selección, volcamos al input hidden
+    $sel.on('change', function(){
+        var vals = $(this).val() || [];
+        $('#pinnacle_leagues').val(vals.join(','));
+    });
+});
+</script>
+  <!-- Script para cargar dinámicamente las ligas de Pinnacle -->
+    <script>
+    jQuery(document).ready(function($){
+        var $sel = $('#pinnacle_leagues_select');
+        if (!$sel.length) {
+            return;
+        }
+        // Obtener ligas vía AJAX
+        $.post(ajaxurl, {
+            action: 'ft_get_pinnacle_leagues',
+            nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>'
+        }, function(resp){
+            if (resp.success) {
+                // Valores previamente guardados
+                var current = $('#pinnacle_leagues').val().split(',').filter(Boolean);
+                // Poblar opciones
+                $.each(resp.data, function(i, league){
+                    var $opt = $('<option>')
+                                .val(league.id)
+                                .text(league.name);
+                    if (current.indexOf(String(league.id)) !== -1) {
+                        $opt.prop('selected', true);
+                    }
+                    $sel.append($opt);
+                });
+            } else {
+                console.error('Error cargando ligas Pinnacle:', resp.data);
+            }
+        }).fail(function(xhr, status, err){
+            console.error('AJAX ft_get_pinnacle_leagues fallo:', status, err);
+        });
+
+        // Al cambiar, volcamos la selección al hidden
+        $sel.on('change', function(){
+            var vals = $(this).val() || [];
+            $('#pinnacle_leagues').val(vals.join(','));
+        });
+    });
+    </script>
+
         <!-- Configuración de Value Betting -->
         <div class="ft-value-config" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px;">
             <h2>💰 Configuración Value Betting</h2>
@@ -4354,20 +4439,28 @@ add_action('wp_ajax_ft_import_csv_url', function() {
 });
 
 add_action('wp_ajax_ft_get_pinnacle_leagues', function() {
+    check_ajax_referer('ft_nonce', 'nonce');
     if (!current_user_can('manage_options')) {
         wp_send_json_error('No tienes permisos.');
     }
 
     require_once FT_PLUGIN_PATH . 'includes/class-pinnacle-api.php';
-    $api = new FT_Pinnacle_API();
+
+    $username = get_option('ft_pinnacle_username');
+    $password = get_option('ft_pinnacle_password');
+    if (! $username || ! $password) {
+        wp_send_json_error('Faltan credenciales en configuración de Pinnacle.');
+    }
+
+    $api = new FT_Pinnacle_API($username, $password);
     $leagues = $api->get_leagues();
 
-    // Devuelve: [ [id => ..., name => ...], ... ]
+    // Normalizar respuesta
     $out = [];
     foreach ($leagues as $l) {
         $out[] = [
-            'id' => $l['id'],
-            'name' => $l['name']
+            'id'   => $l['id'],
+            'name' => $l['name'],
         ];
     }
 
@@ -4504,19 +4597,6 @@ add_action('wp_ajax_ft_compare_models', function() {
         wp_send_json_error('Error: ' . $e->getMessage());
     }
 });
-// Añadir en football-tipster.php después de los otros AJAX handlers
-add_action('wp_ajax_ft_get_pinnacle_leagues', function() {
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('No tienes permisos.');
-    }
-
-    $api = new FT_Pinnacle_API();
-    $leagues = $api->get_leagues();
-    
-    wp_send_json_success($leagues);
-});
-
-
 
 
 /**
