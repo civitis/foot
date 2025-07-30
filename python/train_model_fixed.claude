@@ -1,0 +1,209 @@
+#!/usr/bin/env python3.8
+"""
+Script para entrenar modelo Random Forest - VERSIÓN CORREGIDA
+"""
+
+import sys
+import os
+
+# CONFIGURAR RUTAS DE LIBRERÍAS
+plugin_libs = '/var/www/vhosts/virtualrolldice.com/httpdocs/wp-content/plugins/football-tipster/python-libs'
+if os.path.exists(plugin_libs):
+    sys.path.insert(0, plugin_libs)
+
+# Imports
+import json
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+import joblib
+import mysql.connector
+from datetime import datetime
+
+def connect_database():
+    """Conectar a la base de datos WordPress"""
+    print("🔌 Conectando a la base de datos...")
+    
+    # Leer configuración temporal
+    config_file = 'db_config_temp.json'
+    if os.path.exists(config_file):
+        with open(config_file, 'r') as f:
+            config = json.load(f)
+            print(f"✅ Configuración cargada: {config['host']}")
+    else:
+        print("⚠️  Usando configuración por defecto")
+        config = {
+            'host': '127.0.0.1',
+            'user': 'wp_epegn',
+            'password': '~b&DelI9G8Zz&7JG',
+            'database': 'wp_nnp3y',
+			'port': '3306'
+        }
+    
+    try:
+        connection = mysql.connector.connect(**config)
+        print("✅ Conexión establecida")
+        return connection
+    except Exception as e:
+        print(f"❌ Error de conexión: {e}")
+        raise
+
+def load_training_data():
+    """Cargar datos simplificados para entrenamiento"""
+    print("📊 Cargando datos de entrenamiento...")
+    
+    connection = connect_database()
+    cursor = connection.cursor()
+    
+    # Query simplificada
+    query = """
+        SELECT 
+            home_team,
+            away_team,
+            ftr as result,
+            fthg as home_goals,
+            ftag as away_goals,
+            COALESCE(hs, 10) as home_shots,
+            COALESCE(as_shots, 10) as away_shots,
+            COALESCE(hst, 4) as home_shots_target,
+            COALESCE(ast, 4) as away_shots_target,
+            COALESCE(hc, 5) as home_corners,
+            COALESCE(ac, 5) as away_corners
+        FROM wp_ft_matches_advanced 
+        WHERE ftr IS NOT NULL 
+        AND ftr IN ('H', 'D', 'A')
+        AND fthg IS NOT NULL 
+        AND ftag IS NOT NULL
+        LIMIT 1000
+    """
+    
+    cursor.execute(query)
+    results = cursor.fetchall()
+    
+    columns = ['home_team', 'away_team', 'result', 'home_goals', 'away_goals',
+              'home_shots', 'away_shots', 'home_shots_target', 'away_shots_target',
+              'home_corners', 'away_corners']
+    
+    df = pd.DataFrame(results, columns=columns)
+    
+    print(f"✅ Cargados {len(df)} partidos")
+    
+    connection.close()
+    return df
+
+def prepare_features(df):
+    """Preparar características simplificadas"""
+    print("🔧 Preparando características...")
+    
+    # Características básicas calculadas
+    df['home_attack_strength'] = df['home_goals'] / df['home_shots']
+    df['away_attack_strength'] = df['away_goals'] / df['away_shots']
+    df['home_accuracy'] = df['home_shots_target'] / df['home_shots']
+    df['away_accuracy'] = df['away_shots_target'] / df['away_shots']
+    df['shots_ratio'] = df['home_shots'] / (df['home_shots'] + df['away_shots'])
+    df['corners_ratio'] = df['home_corners'] / (df['home_corners'] + df['away_corners'])
+    
+    # Rellenar NaN
+    df = df.fillna(0.5)
+    
+    # Características finales
+    features = ['home_goals', 'away_goals', 'home_shots', 'away_shots',
+               'home_shots_target', 'away_shots_target', 'home_corners', 'away_corners',
+               'home_attack_strength', 'away_attack_strength', 'home_accuracy', 'away_accuracy',
+               'shots_ratio', 'corners_ratio']
+    
+    X = df[features]
+    y = df['result']
+    
+    print(f"✅ Preparadas {len(features)} características para {len(X)} partidos")
+    return X, y, features
+
+def train_random_forest(X, y):
+    """Entrenar modelo Random Forest"""
+    print("🌲 Entrenando Random Forest...")
+    
+    # Dividir datos
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    print(f"📊 Datos de entrenamiento: {len(X_train)}")
+    print(f"📊 Datos de prueba: {len(X_test)}")
+    
+    # Crear modelo
+    model = RandomForestClassifier(
+        n_estimators=50,  # Reducido para ser más rápido
+        max_depth=8,
+        min_samples_split=10,
+        random_state=42,
+        n_jobs=1  # Un solo proceso para evitar problemas
+    )
+    
+    # Entrenar
+    model.fit(X_train, y_train)
+    print("✅ Entrenamiento completado")
+    
+    # Evaluar
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    
+    print(f"📈 Precisión del modelo: {accuracy:.2%}")
+    
+    return model, accuracy
+
+def save_model(model, features, accuracy):
+    """Guardar modelo"""
+    print("💾 Guardando modelo...")
+    
+    models_dir = '../models'
+    if not os.path.exists(models_dir):
+        os.makedirs(models_dir)
+    
+    # Guardar modelo
+    model_path = os.path.join(models_dir, 'football_model.pkl')
+    joblib.dump(model, model_path)
+    
+    # Metadatos
+    metadata = {
+        'features': features,
+        'accuracy': float(accuracy),
+        'training_date': datetime.now().isoformat(),
+        'model_type': 'RandomForestClassifier'
+    }
+    
+    metadata_path = os.path.join(models_dir, 'football_metadata.json')
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    print(f"✅ Modelo guardado: {model_path}")
+    print(f"✅ Metadatos guardados: {metadata_path}")
+
+def main():
+    print("🚀 Iniciando entrenamiento Random Forest")
+    print("=" * 50)
+    
+    try:
+        # Verificar librerías
+        print(f"NumPy version: {np.__version__}")
+        print(f"Pandas version: {pd.__version__}")
+        
+        # Entrenar
+        df = load_training_data()
+        X, y, features = prepare_features(df)
+        model, accuracy = train_random_forest(X, y)
+        save_model(model, features, accuracy)
+        
+        print(f"\n🎉 Entrenamiento completado exitosamente!")
+        print(f"📈 Precisión final: {accuracy:.2%}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+if __name__ == "__main__":
+    success = main()
+    sys.exit(0 if success else 1)

@@ -1,0 +1,21 @@
+{
+  "features": [
+    "home_goals",
+    "away_goals",
+    "home_shots",
+    "away_shots",
+    "home_shots_target",
+    "away_shots_target",
+    "home_corners",
+    "away_corners",
+    "home_attack_strength",
+    "away_attack_strength",
+    "home_accuracy",
+    "away_accuracy",
+    "shots_ratio",
+    "corners_ratio"
+  ],
+  "accuracy": 0.95,
+  "training_date": "2025-07-17T10:51:23.535527",
+  "model_type": "RandomForestClassifier"
+}

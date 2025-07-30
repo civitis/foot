@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Football Tipster - Benchmark con registro detallado de apuestas
+Football Tipster - Benchmark con sistema de stake variable (1-5)
 """
 
 import sys
@@ -18,6 +18,77 @@ if plugin_libs not in sys.path:
 
 import mysql.connector
 from sklearn.ensemble import RandomForestClassifier
+
+
+
+def calculate_stake(value, confidence, min_stake=1, max_stake=5):
+    """
+    Calcula el stake (1-5) basado en value y confianza
+    
+    Sistema:
+    - Value es el factor principal (60% del peso)
+    - Confianza es el factor secundario (40% del peso)
+    
+    Stake 1: Value 10-15% y Confianza 40-45%
+    Stake 2: Value 15-20% y Confianza 45-50%
+    Stake 3: Value 20-25% y Confianza 50-55%
+    Stake 4: Value 25-30% y Confianza 55-60%
+    Stake 5: Value >30% y Confianza >60%
+    """
+    
+    # Calcular score de value (0-10)
+    if value < 0.10:
+        value_score = 0
+    elif value < 0.15:
+        value_score = 2
+    elif value < 0.20:
+        value_score = 4
+    elif value < 0.25:
+        value_score = 6
+    elif value < 0.30:
+        value_score = 8
+    else:
+        value_score = 10
+    
+    # Calcular score de confianza (0-10)
+    if confidence < 0.40:
+        confidence_score = 0
+    elif confidence < 0.45:
+        confidence_score = 2
+    elif confidence < 0.50:
+        confidence_score = 4
+    elif confidence < 0.55:
+        confidence_score = 6
+    elif confidence < 0.60:
+        confidence_score = 8
+    else:
+        confidence_score = 10
+    
+    # Combinar scores (60% value, 40% confianza)
+    combined_score = (value_score * 0.6) + (confidence_score * 0.4)
+    
+    # Convertir a stake 1-5
+    if combined_score < 2:
+        stake = 1
+    elif combined_score < 4:
+        stake = 2
+    elif combined_score < 6:
+        stake = 3
+    elif combined_score < 8:
+        stake = 4
+    else:
+        stake = 5
+    
+    # Aplicar límites adicionales de seguridad
+    # No apostar stake 5 a cuotas muy altas (riesgo)
+    if stake == 5 and value < 0.25:
+        stake = 4
+    
+    # No apostar stake alto si la confianza es muy baja
+    if stake >= 4 and confidence < 0.50:
+        stake = 3
+    
+    return stake
 
 def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last_n_games=10):
     """
@@ -159,6 +230,56 @@ def prepare_features_for_match(cursor, table_name, home_team, away_team, match_d
     
     return features
 
+def load_value_config(cursor, table_prefix):
+    """
+    Carga la configuración de value betting desde la base de datos
+    """
+    config_table = f"{table_prefix}ft_value_config"
+    
+    try:
+        cursor.execute(f"SELECT * FROM {config_table} LIMIT 1")
+        config = cursor.fetchone()
+        
+        if config:
+            return {
+                'min_value': float(config[1]) / 100,  # Convertir porcentaje a decimal
+                'min_confidence': float(config[2]),
+                'max_stake_percentage': float(config[3]) / 100,
+                'kelly_fraction': float(config[4]),
+                'markets_enabled': config[5].split(',') if config[5] else ['moneyline'],
+                'auto_analyze': bool(config[6]),
+                'min_odds': float(config[7]),
+                'max_odds': float(config[8]),
+                'stake_system': config[9],
+                'base_unit': float(config[10]),
+                'max_daily_bets': int(config[11]),
+                'stop_loss_daily': float(config[12]),
+                'stop_loss_weekly': float(config[13]),
+                'min_bankroll_percentage': float(config[14]) / 100,
+                'streak_protection': bool(config[18])
+            }
+        else:
+            # Valores por defecto si no hay configuración
+            return {
+                'min_value': 0.10,
+                'min_confidence': 0.40,
+                'min_odds': 1.6,
+                'max_odds': 4.0,
+                'base_unit': 10,
+                'stake_system': 'variable'
+            }
+    except:
+        # Valores por defecto en caso de error
+        return {
+            'min_value': 0.10,
+            'min_confidence': 0.40,
+            'min_odds': 1.6,
+            'max_odds': 4.0,
+            'base_unit': 10,
+            'stake_system': 'variable'
+        }
+
+
 def main():
     """Función principal del benchmark"""
     try:
@@ -193,7 +314,7 @@ def main():
             password=db_config['password']
         )
         cursor = conn.cursor()
-        
+        value_config = load_value_config(cursor, table_prefix)
         # Obtener rango de fechas
         date_query = f"""
         SELECT MIN(date) as min_date, MAX(date) as max_date
@@ -284,20 +405,28 @@ def main():
         predictions = []
         probabilities = []
         y_test = []
-        betting_details = []  # Nuevo: detalles de cada apuesta
+        betting_details = []
         
-        # Configuración de apuestas más estricta
+        # Configuración de apuestas con stake variable
         initial_bankroll = 1000
         current_bankroll = initial_bankroll
-        stake = 10
-        total_bets = 0
+        base_unit = 10  # Unidad base de apuesta
+        total_stakes = 0
         winning_bets = 0
+        total_bets = 0
         
-        # Criterios más estrictos
-        min_value = 0.15      # Requiere 15% de value (más estricto)
-        min_confidence = 0.45  # Confianza mínima del 45%
-        max_odds = 3.5        # No apostar a cuotas superiores a 3.5
-        min_odds = 1.7        # No apostar a cuotas inferiores a 1.7
+        # Criterios de apuesta
+        # Usar la configuración en lugar de valores hardcodeados
+        min_value = value_config['min_value']
+        min_confidence = value_config['min_confidence']
+        min_odds = value_config['min_odds']
+        max_odds = value_config['max_odds']
+        base_unit = value_config['base_unit']
+        
+        # Estadísticas por stake
+        stakes_distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        stakes_roi = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        stakes_profit = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
         
         for match_date, home_team, away_team, result, odds_h, odds_d, odds_a in test_matches:
             # Preparar features
@@ -313,12 +442,13 @@ def main():
             
             # Procesar apuesta
             if odds_h and odds_d and odds_a:
-                odds = [float(odds_a), float(odds_d), float(odds_h)]  # 0=Away, 1=Draw, 2=Home
+                odds = [float(odds_a), float(odds_d), float(odds_h)]
                 
                 # Buscar la mejor apuesta
                 best_value = -1
                 best_bet = None
                 best_odd = None
+                best_confidence = 0
                 
                 for outcome in range(3):
                     if min_odds <= odds[outcome] <= max_odds:
@@ -331,21 +461,31 @@ def main():
                                 best_value = value
                                 best_bet = outcome
                                 best_odd = odds[outcome]
+                                best_confidence = our_prob
                 
-                # Registrar apuesta si hay value
+                # Realizar apuesta si hay value
                 if best_bet is not None:
+                    # Calcular stake variable (1-5)
+                    stake_level = calculate_stake(best_value, best_confidence)
+                    stake_amount = base_unit * stake_level
+                    
                     total_bets += 1
+                    total_stakes += stake_amount
+                    stakes_distribution[stake_level] += 1
+                    
                     bet_won = (best_bet == result_map[result])
                     
                     if bet_won:
-                        profit = stake * (best_odd - 1)
+                        profit = stake_amount * (best_odd - 1)
                         current_bankroll += profit
                         winning_bets += 1
+                        stakes_profit[stake_level] += profit
                     else:
-                        profit = -stake
-                        current_bankroll -= stake
+                        profit = -stake_amount
+                        current_bankroll -= stake_amount
+                        stakes_profit[stake_level] -= stake_amount
                     
-                    # Guardar detalles de la apuesta
+                    # Guardar detalles
                     betting_details.append({
                         'date': str(match_date),
                         'home_team': home_team,
@@ -353,13 +493,19 @@ def main():
                         'prediction': ['A', 'D', 'H'][best_bet],
                         'actual_result': result,
                         'odds': round(best_odd, 2),
-                        'stake': stake,
-                        'confidence': round(prob[best_bet], 3),
+                        'stake_level': stake_level,
+                        'stake_amount': stake_amount,
+                        'confidence': round(best_confidence, 3),
                         'value': round(best_value, 3),
                         'profit': round(profit, 2),
                         'won': bet_won,
                         'bankroll': round(current_bankroll, 2)
                     })
+        
+        # Calcular ROI por stake
+        for stake in range(1, 6):
+            if stakes_distribution[stake] > 0:
+                stakes_roi[stake] = (stakes_profit[stake] / (stakes_distribution[stake] * base_unit * stake)) * 100
         
         predictions = np.array(predictions)
         y_test = np.array(y_test)
@@ -378,7 +524,7 @@ def main():
         away_wins_correct = np.sum((predictions == 0) & (y_test == 0))
         
         profit_loss = current_bankroll - initial_bankroll
-        roi = (profit_loss / (total_bets * stake) * 100) if total_bets > 0 else 0
+        roi = (profit_loss / total_stakes * 100) if total_stakes > 0 else 0
         
         # Resultados
         results = {
@@ -410,15 +556,20 @@ def main():
                 'roi': round(roi, 1),
                 'profit_loss': round(profit_loss, 2),
                 'win_rate': float(winning_bets / total_bets) if total_bets > 0 else 0,
-                'stake_per_bet': stake,
+                'total_stakes': round(total_stakes, 2),
+                'avg_stake': round(total_stakes / total_bets, 2) if total_bets > 0 else 0,
                 'betting_criteria': {
                     'min_value': min_value,
                     'min_confidence': min_confidence,
                     'min_odds': min_odds,
-                    'max_odds': max_odds
-                }
+                    'max_odds': max_odds,
+                    'base_unit': base_unit
+                },
+                'stakes_distribution': stakes_distribution,
+                'stakes_roi': {k: round(v, 1) for k, v in stakes_roi.items()},
+                'stakes_profit': {k: round(v, 2) for k, v in stakes_profit.items()}
             },
-            'betting_details': betting_details  # Nuevo: incluir detalles
+            'betting_details': betting_details
         }
         
         print(json.dumps(results))

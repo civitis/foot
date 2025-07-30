@@ -1,0 +1,8 @@
+✅ Ruta agregada: /var/www/vhosts/virtualrolldice.com/httpdocs/wp-content/plugins/football-tipster/python-libs
+🧪 Probando imports...
+✅ numpy 1.20.3
+✅ pandas 1.2.5
+✅ scikit-learn OK
+✅ joblib 1.0.1
+✅ mysql-connector 8.0.28
+🏁 Test completado
