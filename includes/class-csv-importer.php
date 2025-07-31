@@ -188,43 +188,57 @@ class FT_CSV_Importer {
             'attendance' => 'attendance',
             'referee' => 'referee',
             
-            // Cuotas Bet365
-            'b365h' => 'b365h',
-            'b365d' => 'b365d',
-            'b365a' => 'b365a',
-            'b365>2.5' => 'b365_over25',
-            'b365<2.5' => 'b365_under25',
-            
-            // Cuotas Bet&Win
-            'bwh' => 'bwh',
-            'bwd' => 'bwd',
-            'bwa' => 'bwa',
-            
-            // Cuotas Interwetten
-            'iwh' => 'iwh',
-            'iwd' => 'iwd',
-            'iwa' => 'iwa',
-            
-            // Cuotas Pinnacle
-            'psh' => 'psh',
-            'psd' => 'psd',
-            'psa' => 'psa',
-            
-            // Cuotas William Hill
-            'whh' => 'whh',
-            'whd' => 'whd',
-            'wha' => 'wha',
-            
-            // Cuotas VC Bet
-            'vch' => 'vch',
-            'vcd' => 'vcd',
-            'vca' => 'vca',
-            
-            // Cuotas promedio
-            'avgh' => 'avgh',
-            'avgd' => 'avgd',
-            'avga' => 'avga'
-        );
+            // Cuotas Bet365 - Moneyline
+'b365h' => 'b365h',
+'b365d' => 'b365d', 
+'b365a' => 'b365a',
+
+// Cuotas Bet365 - Over/Under
+'b365>2.5' => 'b365_over25',
+'b365<2.5' => 'b365_under25',
+'b365>1.5' => 'b365_over15',
+'b365<1.5' => 'b365_under15',
+'b365>3.5' => 'b365_over35',
+'b365<3.5' => 'b365_under35',
+
+// Asian Handicap Bet365
+'b365ah' => 'b365_ah_line',
+'b365ahh' => 'b365_ah_home',
+'b365aha' => 'b365_ah_away',
+
+// Cuotas Pinnacle - Moneyline
+'psh' => 'psh',
+'psd' => 'psd',
+'psa' => 'psa',
+
+// Cuotas Pinnacle - Over/Under
+'p>2.5' => 'p_over25',
+'p<2.5' => 'p_under25',
+
+// Cuotas William Hill
+'whh' => 'whh',
+'whd' => 'whd',
+'wha' => 'wha',
+
+// Cuotas Interwetten
+'iwh' => 'iwh',
+'iwd' => 'iwd', 
+'iwa' => 'iwa',
+
+// Cuotas promedio máximas
+'maxh' => 'max_home',
+'maxd' => 'max_draw',
+'maxa' => 'max_away',
+'max>2.5' => 'max_over25',
+'max<2.5' => 'max_under25',
+
+// Cuotas promedio
+'avgh' => 'avg_home',
+'avgd' => 'avg_draw',
+'avga' => 'avg_away',
+'avg>2.5' => 'avg_over25',
+'avg<2.5' => 'avg_under25'
+);
         
         // Crear mapeo basado en los headers del archivo
         foreach ($headers as $index => $header) {

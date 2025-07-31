@@ -79,7 +79,6 @@ class FootballTipster {
         add_shortcode('football_predictions_advanced', array($this, 'render_predictions_advanced'));
         
         // Tareas cron
-        add_action('ft_update_xg_daily', array('FT_XG_Scraper', 'update_missing_xg'));
         add_action('ft_retrain_model_weekly', array($this, 'auto_retrain_model'));
         add_action('ft_update_stats', array('FT_Predictor', 'update_team_stats'));
     }
@@ -112,7 +111,10 @@ class FootballTipster {
         if (!get_option('ft_api_key')) {
             update_option('ft_api_key', wp_generate_password(32, false));
         }
-        
+        // En football-tipster.php, en el método activate()
+require_once FT_PLUGIN_PATH . 'includes/class-value-config.php';
+FT_Value_Config::create_table();
+
         // Flush rewrite rules
         flush_rewrite_rules();
 		// Configuración inicial de value betting
@@ -144,217 +146,15 @@ if (!get_option('ft_bankroll')) {
     /**
      * Crear tablas de base de datos
      */
-    private function create_tables() {
-        global $wpdb;
-        
-        $charset_collate = $wpdb->get_charset_collate();
-        
-        // Tabla para partidos con estadísticas avanzadas
-        $table_matches = $wpdb->prefix . 'ft_matches_advanced';
-        $sql_matches = "CREATE TABLE IF NOT EXISTS $table_matches (
-            id int(11) NOT NULL AUTO_INCREMENT,
-            division varchar(50) NOT NULL DEFAULT '',
-            date date NOT NULL,
-            time time DEFAULT NULL,
-            home_team varchar(100) NOT NULL,
-            away_team varchar(100) NOT NULL,
-            fthg int(11) DEFAULT NULL COMMENT 'Full Time Home Goals',
-            ftag int(11) DEFAULT NULL COMMENT 'Full Time Away Goals',
-            ftr varchar(1) DEFAULT NULL COMMENT 'Full Time Result',
-            hthg int(11) DEFAULT NULL COMMENT 'Half Time Home Goals',
-            htag int(11) DEFAULT NULL COMMENT 'Half Time Away Goals',
-            htr varchar(1) DEFAULT NULL COMMENT 'Half Time Result',
-            attendance int(11) DEFAULT NULL,
-            referee varchar(100) DEFAULT NULL,
-            hs int(11) DEFAULT NULL COMMENT 'Home Shots',
-            as_shots int(11) DEFAULT NULL COMMENT 'Away Shots',
-            hst int(11) DEFAULT NULL COMMENT 'Home Shots on Target',
-            ast int(11) DEFAULT NULL COMMENT 'Away Shots on Target',
-            hhw int(11) DEFAULT NULL COMMENT 'Home Hit Woodwork',
-            ahw int(11) DEFAULT NULL COMMENT 'Away Hit Woodwork',
-            hc int(11) DEFAULT NULL COMMENT 'Home Corners',
-            ac int(11) DEFAULT NULL COMMENT 'Away Corners',
-            hf int(11) DEFAULT NULL COMMENT 'Home Fouls',
-            af int(11) DEFAULT NULL COMMENT 'Away Fouls',
-            hfkc int(11) DEFAULT NULL COMMENT 'Home Free Kicks Conceded',
-            afkc int(11) DEFAULT NULL COMMENT 'Away Free Kicks Conceded',
-            ho int(11) DEFAULT NULL COMMENT 'Home Offsides',
-            ao int(11) DEFAULT NULL COMMENT 'Away Offsides',
-            hy int(11) DEFAULT NULL COMMENT 'Home Yellow Cards',
-            ay int(11) DEFAULT NULL COMMENT 'Away Yellow Cards',
-            hr int(11) DEFAULT NULL COMMENT 'Home Red Cards',
-            ar int(11) DEFAULT NULL COMMENT 'Away Red Cards',
-            hbp int(11) DEFAULT NULL COMMENT 'Home Booking Points',
-            abp int(11) DEFAULT NULL COMMENT 'Away Booking Points',
-            home_xg float DEFAULT NULL COMMENT 'Home Expected Goals',
-            away_xg float DEFAULT NULL COMMENT 'Away Expected Goals',
-            data_source varchar(50) DEFAULT 'csv',
-            sport varchar(20) DEFAULT 'football',
-            season varchar(20) DEFAULT '',
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            KEY idx_date (date),
-            KEY idx_teams (home_team, away_team),
-            KEY idx_season (season),
-            KEY idx_sport (sport)
-        ) $charset_collate;";
-        
-        // Tabla para estadísticas agregadas de equipos
-        $table_team_stats = $wpdb->prefix . 'ft_team_stats_advanced';
-        $sql_team_stats = "CREATE TABLE IF NOT EXISTS $table_team_stats (
-            id int(11) NOT NULL AUTO_INCREMENT,
-            team_name varchar(100) NOT NULL,
-            season varchar(20) NOT NULL,
-            sport varchar(20) DEFAULT 'football',
-            matches_played int(11) DEFAULT 0,
-            wins int(11) DEFAULT 0,
-            draws int(11) DEFAULT 0,
-            losses int(11) DEFAULT 0,
-            goals_for int(11) DEFAULT 0,
-            goals_against int(11) DEFAULT 0,
-            avg_shots_for float DEFAULT 0,
-            avg_shots_against float DEFAULT 0,
-            avg_shots_target_for float DEFAULT 0,
-            avg_shots_target_against float DEFAULT 0,
-            avg_corners_for float DEFAULT 0,
-            avg_corners_against float DEFAULT 0,
-            avg_fouls_for float DEFAULT 0,
-            avg_fouls_against float DEFAULT 0,
-            avg_yellows float DEFAULT 0,
-            avg_reds float DEFAULT 0,
-            avg_xg_for float DEFAULT 0,
-            avg_xg_against float DEFAULT 0,
-            form_last_5 varchar(5) DEFAULT '',
-            form_last_10 varchar(10) DEFAULT '',
-            home_wins int(11) DEFAULT 0,
-            home_draws int(11) DEFAULT 0,
-            home_losses int(11) DEFAULT 0,
-            away_wins int(11) DEFAULT 0,
-            away_draws int(11) DEFAULT 0,
-            away_losses int(11) DEFAULT 0,
-            last_updated datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            UNIQUE KEY team_season_sport (team_name, season, sport),
-            KEY idx_team (team_name),
-            KEY idx_season (season)
-        ) $charset_collate;";
-        
-        // Tabla para predicciones
-        $table_predictions = $wpdb->prefix . 'ft_predictions';
-        $sql_predictions = "CREATE TABLE IF NOT EXISTS $table_predictions (
-            id int(11) NOT NULL AUTO_INCREMENT,
-            match_date datetime NOT NULL,
-            home_team varchar(100) NOT NULL,
-            away_team varchar(100) NOT NULL,
-            prediction varchar(20) NOT NULL,
-            probability float NOT NULL,
-            sport varchar(20) DEFAULT 'football',
-            predicted_at datetime DEFAULT CURRENT_TIMESTAMP,
-            actual_result varchar(20) DEFAULT NULL,
-            is_correct tinyint(1) DEFAULT NULL,
-            metadata longtext DEFAULT NULL COMMENT 'JSON con datos adicionales',
-            PRIMARY KEY (id),
-            KEY idx_match_date (match_date),
-            KEY idx_teams (home_team, away_team),
-            KEY idx_predicted_at (predicted_at)
-        ) $charset_collate;";
-        
-        // Tabla para configuraciones
-        $table_config = $wpdb->prefix . 'ft_config';
-        $sql_config = "CREATE TABLE IF NOT EXISTS $table_config (
-            id int(11) NOT NULL AUTO_INCREMENT,
-            config_key varchar(100) NOT NULL,
-            config_value longtext NOT NULL,
-            sport varchar(20) DEFAULT 'football',
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            PRIMARY KEY (id),
-            UNIQUE KEY config_key_sport (config_key, sport)
-        ) $charset_collate;";
-        
-		// Tabla para fixtures (próximos partidos)
-$table_fixtures = $wpdb->prefix . 'ft_fixtures';
-$sql_fixtures = "CREATE TABLE IF NOT EXISTS $table_fixtures (
-    id int(11) NOT NULL AUTO_INCREMENT,
-    pinnacle_id varchar(50) NOT NULL,
-    sport varchar(20) DEFAULT 'football',
-    league varchar(100) NOT NULL,
-    league_id varchar(50) NOT NULL,
-    home_team varchar(100) NOT NULL,
-    away_team varchar(100) NOT NULL,
-    start_time datetime NOT NULL,
-    status varchar(20) DEFAULT 'upcoming',
-    period_number int(11) DEFAULT 0,
-    home_score int(11) DEFAULT NULL,
-    away_score int(11) DEFAULT NULL,
-    created_at datetime DEFAULT CURRENT_TIMESTAMP,
-    updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY pinnacle_id (pinnacle_id),
-    KEY idx_start_time (start_time),
-    KEY idx_status (status),
-    KEY idx_teams (home_team, away_team)
-) $charset_collate;";
+   /**
+ * Crear tablas de base de datos
+ */
+private function create_tables() {
+    require_once FT_PLUGIN_PATH . 'includes/database/class-table-creator.php';
+    $table_creator = new FT_Table_Creator();
+    $table_creator->create_all_tables();
+}
 
-// Tabla para odds (cuotas)
-$table_odds = $wpdb->prefix . 'ft_odds';
-$sql_odds = "CREATE TABLE IF NOT EXISTS $table_odds (
-    id int(11) NOT NULL AUTO_INCREMENT,
-    fixture_id int(11) NOT NULL,
-    pinnacle_fixture_id varchar(50) NOT NULL,
-    market_type varchar(50) NOT NULL COMMENT 'moneyline, spread, total',
-    bet_type varchar(20) NOT NULL COMMENT 'home, away, draw, over, under',
-    odds decimal(10,3) NOT NULL,
-    decimal_odds decimal(10,3) NOT NULL,
-    implied_probability decimal(5,4) NOT NULL,
-    line_value decimal(5,2) DEFAULT NULL COMMENT 'For spread/total bets',
-    last_updated datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    KEY idx_fixture (fixture_id),
-    KEY idx_market (market_type, bet_type),
-    KEY idx_updated (last_updated),
-    FOREIGN KEY (fixture_id) REFERENCES $table_fixtures(id) ON DELETE CASCADE
-) $charset_collate;";
-
-// Tabla para value bets (apuestas de valor)
-$table_value_bets = $wpdb->prefix . 'ft_value_bets';
-$sql_value_bets = "CREATE TABLE IF NOT EXISTS $table_value_bets (
-    id int(11) NOT NULL AUTO_INCREMENT,
-    fixture_id int(11) NOT NULL,
-    prediction_id int(11) DEFAULT NULL,
-    market_type varchar(50) NOT NULL,
-    bet_type varchar(20) NOT NULL,
-    our_probability decimal(5,4) NOT NULL,
-    market_odds decimal(10,3) NOT NULL,
-    implied_probability decimal(5,4) NOT NULL,
-    value_percentage decimal(5,2) NOT NULL,
-    expected_value decimal(10,4) NOT NULL,
-    confidence_score decimal(3,2) NOT NULL,
-    recommended_stake decimal(10,2) DEFAULT NULL,
-    status varchar(20) DEFAULT 'active',
-    created_at datetime DEFAULT CURRENT_TIMESTAMP,
-    updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    KEY idx_fixture (fixture_id),
-    KEY idx_value (value_percentage),
-    KEY idx_status (status),
-    KEY idx_created (created_at),
-    FOREIGN KEY (fixture_id) REFERENCES $table_fixtures(id) ON DELETE CASCADE
-) $charset_collate;";
-
-		
-// Ejecutar las nuevas tablas
-dbDelta($sql_fixtures);
-dbDelta($sql_odds);
-dbDelta($sql_value_bets);
-		
-        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-        dbDelta($sql_matches);
-        dbDelta($sql_team_stats);
-        dbDelta($sql_predictions);
-        dbDelta($sql_config);
-    }
     
     /**
      * Crear directorios necesarios
@@ -587,572 +387,410 @@ add_submenu_page(
  * Página de Benchmarking
  */
 public function benchmarking_page() {
-    // Cargar clase de benchmarking
-    if (!class_exists('FT_Benchmarking')) {
-        require_once FT_PLUGIN_PATH . 'includes/class-benchmarking.php';
+    if (!class_exists('FT_Benchmarking_Advanced')) {
+        require_once FT_PLUGIN_PATH . 'includes/class-benchmarking-advanced.php';
     }
     
-    $benchmarking = new FT_Benchmarking();
-    $available_seasons = $benchmarking->get_available_seasons();
-    $benchmark_history = $benchmarking->get_benchmark_history();
+    $benchmarking = new FT_Benchmarking_Advanced();
     ?>
     <div class="wrap">
-        <h1>📊 Benchmarking del Modelo</h1>
-        <p>Valida la precisión real del modelo usando datos históricos por temporadas.</p>
+        <h1>🚀 Benchmarking Avanzado</h1>
         
-        <!-- Ejecutar nuevo benchmark -->
-        <div class="ft-benchmark-executor" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
-            <h2>🧪 Ejecutar Nuevo Benchmark</h2>
-            <form id="ft-benchmark-form">
-                <input type="hidden" id="ft_benchmark_nonce" name="benchmark_nonce" value="<?php echo wp_create_nonce('ft_nonce'); ?>">
+        <div class="card">
+            <h3>Configurar Benchmark Avanzado</h3>
+            <form id="advanced-benchmark-form">
+                <?php wp_nonce_field('ft_nonce', 'nonce'); ?>
+                
                 <table class="form-table">
                     <tr>
-                        <th scope="row">
-                            <label for="benchmark-season">Temporada de Prueba</label>
-                        </th>
+                        <th><label for="season">Temporada a Evaluar</label></th>
                         <td>
-                            <select id="benchmark-season" name="season" required>
-                                <option value="">Selecciona temporada...</option>
-                                <?php foreach ($available_seasons as $season): ?>
-                                    <option value="<?php echo esc_attr($season); ?>"><?php echo esc_html($season); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="benchmark-league">Liga (Opcional)</label>
-                        </th>
-                        <td>
-                            <select id="benchmark-league" name="league">
-                                <option value="all">Todas las ligas</option>
-                                <?php
-                                $leagues = $benchmarking->get_available_leagues();
-                                foreach ($leagues as $league): ?>
-                                    <option value="<?php echo esc_attr($league->league); ?>">
-                                        <?php echo esc_html($league->league); ?> (<?php echo esc_html($league->total); ?> partidos)
+                            <select name="season" id="season" required>
+                                <option value="">Seleccionar temporada...</option>
+                                <?php 
+                                $seasons = $benchmarking->get_available_seasons();
+                                foreach ($seasons as $season): ?>
+                                    <option value="<?php echo esc_attr($season); ?>">
+                                        <?php echo esc_html($season); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                            <p class="description">
+                                Temporadas disponibles con datos completos y cuotas B365
+                            </p>
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">
-                            <label for="model-type">Tipo de Modelo</label>
-                        </th>
+                        <th><label for="model_type">Tipo de Modelo</label></th>
                         <td>
-                            <select id="model-type" name="model_type" required>
-                                <option value="with_xg">Con xG (Expected Goals)</option>
-                                <option value="without_xg">Sin xG (Solo estadísticas básicas)</option>
+                            <select name="model_type" id="model_type">
+                                <option value="with_xg">⭐ Con xG (Recomendado)</option>
+                                <option value="without_xg">📊 Sin xG</option>
                             </select>
-                            <p class="description">El modelo con xG usa Expected Goals para mejorar las predicciones</p>
+                        </td>
+                    </tr>
+                    <tr>
+    <th><label for="league">Liga</label></th>
+    <td>
+        <select name="league" id="league">
+            <option value="all">Todas las ligas</option>
+            <?php 
+            $leagues = $benchmarking->get_available_leagues();
+            foreach ($leagues as $league): ?>
+                <option value="<?php echo esc_attr($league->division); ?>">
+                    <?php echo esc_html($league->league_name); ?> 
+                    (<?php echo $league->total_matches; ?> partidos)
+                </option>
+            <?php endforeach; ?>
+        </select>
+    </td>
+</tr>
+
+                    <tr>
+                        <th>Mercados a Incluir</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="moneyline" checked disabled> 
+                                Moneyline (1X2) - Siempre incluido
+                            </label><br>
+                            <label>
+                                <input type="checkbox" name="include_over_under" id="include_over_under" checked> 
+                                Over/Under 2.5 goles (usando B365)
+                            </label><br>
+                            <label>
+                                <input type="checkbox" name="include_asian_handicap" id="include_asian_handicap"> 
+                                Asian Handicap (simulado)
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Opciones Avanzadas</th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="exclude_draws" id="exclude_draws"> 
+                                🚫 Excluir empates (X) del análisis
+                            </label><br>
+                            <small class="description">
+                                Si activas esta opción, solo se analizarán apuestas a victoria local o visitante.
+                            </small>
                         </td>
                     </tr>
                 </table>
+                
                 <p class="submit">
-                    <button type="submit" class="button button-primary button-large">
-                        🚀 Ejecutar Benchmark
+                    <button type="submit" class="button button-primary" id="run-advanced-benchmark">
+                        🚀 Ejecutar Benchmark Avanzado
                     </button>
                 </p>
             </form>
-            
-            <div id="ft-benchmark-progress" style="display: none;">
-                <h3>⏳ Ejecutando Benchmark...</h3>
-                <div class="ft-progress-bar">
-                    <div class="ft-progress-fill"></div>
-                </div>
-                <p id="ft-benchmark-status">Iniciando...</p>
+        </div>
+        
+        <div id="advanced-benchmark-results" style="display: none;">
+            <div class="card">
+                <h3>📊 Resultados del Benchmark Avanzado</h3>
+                <div id="advanced-results-content"></div>
             </div>
-            
-            <div id="ft-benchmark-results"></div>
         </div>
         
-        <!-- Historial de benchmarks -->
-        <div class="ft-benchmark-history" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
-            <h2>📈 Historial de Benchmarks</h2>
-            
-            <?php if (!empty($benchmark_history)): ?>
-                <table class="widefat">
-                    <thead>
-                        <tr>
-                            <th>Temporada</th>
-                            <th>Modelo</th>
-                            <th>Fecha</th>
-                            <th>Partidos</th>
-                            <th>Precisión</th>
-                            <th>Local</th>
-                            <th>Empate</th>
-                            <th>Visitante</th>
-                            <th>ROI</th>
-                            <th>Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($benchmark_history as $benchmark): ?>
-                            <tr>
-                                <td><strong><?php echo esc_html($benchmark->season); ?></strong></td>
-                                <td>
-                                    <span class="ft-model-badge <?php echo $benchmark->model_type === 'with_xg' ? 'ft-model-xg' : 'ft-model-basic'; ?>">
-                                        <?php echo $benchmark->model_type === 'with_xg' ? '⭐ Con xG' : '📊 Básico'; ?>
-                                    </span>
-                                </td>
-                                <td><?php echo date('d/m/Y H:i', strtotime($benchmark->test_date)); ?></td>
-                                <td><?php echo number_format($benchmark->total_predictions); ?></td>
-                                <td>
-                                    <span class="ft-accuracy <?php echo $benchmark->overall_accuracy > 0.55 ? 'ft-good' : ($benchmark->overall_accuracy > 0.45 ? 'ft-fair' : 'ft-poor'); ?>">
-                                        <?php echo number_format($benchmark->overall_accuracy * 100, 1); ?>%
-                                    </span>
-                                </td>
-                                <td><?php echo number_format($benchmark->home_accuracy * 100, 1); ?>%</td>
-                                <td><?php echo number_format($benchmark->draw_accuracy * 100, 1); ?>%</td>
-                                <td><?php echo number_format($benchmark->away_accuracy * 100, 1); ?>%</td>
-                                <td>
-                                    <span class="ft-roi <?php echo $benchmark->value_betting_roi > 0 ? 'ft-positive' : 'ft-negative'; ?>">
-                                        <?php echo number_format($benchmark->value_betting_roi, 1); ?>%
-                                    </span>
-                                </td>
-                                <td>
-                                    <button class="button button-small ft-view-details" data-benchmark-id="<?php echo $benchmark->id; ?>">
-                                        Ver Detalles
-                                    </button>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <p>No hay benchmarks ejecutados todavía. Ejecuta el primero usando el formulario de arriba.</p>
-            <?php endif; ?>
-        </div>
-        
-        <!-- Acciones adicionales -->
-        <div class="ft-benchmark-actions" style="background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
-            <h2>🔧 Acciones Adicionales</h2>
-            <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-                <button id="ft-compare-models" class="button">📊 Comparar Modelos</button>
-                <button id="ft-clear-old-benchmarks" class="button">🗑️ Limpiar Benchmarks Antiguos</button>
-                <button id="ft-export-benchmarks" class="button">📥 Exportar Resultados</button>
-                <button id="ft-quick-benchmark" class="button button-secondary">⚡ Benchmark Rápido</button>
-            </div>
-            <div id="ft-additional-actions-result" style="margin-top: 15px;"></div>
-        </div>
-        
-        <!-- Sección de comparación de modelos -->
-        <div id="ft-model-comparison" style="display: none; background: white; padding: 20px; margin: 20px 0; border-radius: 8px; border: 1px solid #ddd;">
-            <h2>📊 Comparación de Modelos</h2>
-            <div id="ft-comparison-content"></div>
+        <div class="card">
+            <h3>📈 Historial de Benchmarks Avanzados</h3>
+            <?php $benchmarking->display_advanced_benchmark_table(); ?>
         </div>
     </div>
+
+    <script>
+    jQuery(document).ready(function($) {
+        // Verificar datos cuando se selecciona una temporada
+        $('#season').on('change', function() {
+            const season = $(this).val();
+            if (season) {
+                $.post(ajaxurl, {
+                    action: 'ft_verify_season_data',
+                    season: season,
+                    nonce: $('input[name="nonce"]').val()
+                }, function(response) {
+                    if (response.success) {
+                        const data = response.data.data;
+                        let info = `
+                            <div class="season-info">
+                                <strong>Datos disponibles para ${season}:</strong><br>
+                                📊 Total partidos: ${data.total_matches}<br>
+                                ✅ Con resultados: ${data.with_results}<br>
+                                💰 Con cuotas B365: ${data.with_b365_odds}<br>
+                                📈 Con estadísticas: ${data.with_stats}<br>
+                                📅 Período: ${data.first_match} a ${data.last_match}<br>
+                                🏆 Ligas: ${data.leagues}
+                            </div>
+                        `;
+                        
+                        $('.season-info').remove();
+                        $(info).insertAfter('#season').slideDown();
+                    }
+                });
+            }
+        });
+
+        $('#advanced-benchmark-form').on('submit', function(e) {
+            e.preventDefault();
+            
+            const $button = $('#run-advanced-benchmark');
+            const originalText = $button.text();
+            
+            $button.prop('disabled', true).text('⏳ Ejecutando benchmark...');
+            $('#advanced-benchmark-results').hide();
+            
+            const formData = {
+                action: 'ft_run_advanced_benchmark',
+                season: $('#season').val(),
+                model_type: $('#model_type').val(),
+                league: $('#league').val(),
+                exclude_draws: $('#exclude_draws').is(':checked'),
+                include_over_under: $('#include_over_under').is(':checked'),
+                include_asian_handicap: $('#include_asian_handicap').is(':checked'),
+                nonce: $('input[name="nonce"]').val()
+            };
+            
+            $.post(ajaxurl, formData)
+                .done(function(response) {
+                    if (response.success) {
+                        displayAdvancedResults(response.data);
+                        $('#advanced-benchmark-results').show();
+                        
+                        // Recargar tabla de historial
+                        location.reload();
+                    } else {
+                        alert('Error: ' + response.data);
+                    }
+                })
+                .fail(function() {
+                    alert('Error de conexión');
+                })
+                .always(function() {
+                    $button.prop('disabled', false).text(originalText);
+                });
+        });
+        
+        function displayAdvancedResults(data) {
+            const summary = data.summary;
+            const marketBreakdown = summary.market_breakdown;
+            
+            let html = `
+                <div class="benchmark-summary">
+                    <div class="summary-grid">
+                        <div class="summary-item">
+                            <h4>📊 Precisión General</h4>
+                            <span class="big-number">${summary.accuracy}%</span>
+                        </div>
+                        <div class="summary-item">
+                            <h4>💰 ROI Total</h4>
+                            <span class="big-number ${summary.roi > 0 ? 'positive' : 'negative'}">${summary.roi}%</span>
+                        </div>
+                        <div class="summary-item">
+                            <h4>🎯 Apuestas Totales</h4>
+                            <span class="big-number">${summary.total_bets}</span>
+                        </div>
+                        <div class="summary-item">
+                            <h4>📈 Win Rate</h4>
+                            <span class="big-number">${summary.win_rate}%</span>
+                        </div>
+                    </div>
+                    
+                    <h4>📊 Desglose por Mercado</h4>
+                    <table class="wp-list-table widefat">
+                        <thead>
+                            <tr>
+                                <th>Mercado</th>
+                                <th>Apuestas</th>
+                                <th>Win Rate</th>
+                                <th>ROI</th>
+                                <th>Beneficio</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+            
+            Object.keys(marketBreakdown).forEach(market => {
+                const data = marketBreakdown[market];
+                if (data.bets > 0) {
+                    html += `
+                        <tr>
+                            <td><strong>${market.toUpperCase()}</strong></td>
+                            <td>${data.bets}</td>
+                            <td>${data.win_rate}%</td>
+                            <td class="${data.roi > 0 ? 'positive' : 'negative'}">${data.roi}%</td>
+                            <td>€${data.profit.toFixed(2)}</td>
+                        </tr>
+                    `;
+                }
+            });
+            
+            html += `
+                        </tbody>
+                    </table>
+                    
+                    <p>
+                        <strong>Total de detalles de apuestas registrados:</strong> ${summary.betting_details_count}
+                    </p>
+                </div>
+            `;
+            
+            $('#advanced-results-content').html(html);
+        }
+    });
     
+    function showAdvancedBenchmarkDetails(benchmarkId) {
+        // AJAX call para mostrar detalles completos partido por partido
+        jQuery.post(ajaxurl, {
+            action: 'get_advanced_benchmark_details',
+            benchmark_id: benchmarkId,
+            nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>'
+        }, function(response) {
+            if (response.success) {
+                showBenchmarkDetailsModal(response.data);
+            }
+        });
+    }
+    
+    function showBenchmarkDetailsModal(data) {
+        // Crear modal con detalles partido por partido
+        const modal = document.createElement('div');
+        modal.className = 'benchmark-details-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2>📊 Detalles Partido por Partido</h2>
+                <div class="details-content">
+                    ${formatBettingDetails(data.betting_details)}
+                </div>
+            </div>
+        `;
+        
+        document.body.appendChild(modal);
+        modal.style.display = 'block';
+        
+        modal.querySelector('.close').onclick = function() {
+            document.body.removeChild(modal);
+        };
+    }
+    
+    function formatBettingDetails(bettingDetails) {
+        let html = `
+            <table class="wp-list-table widefat striped">
+                <thead>
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Partido</th>
+                        <th>Mercado</th>
+                        <th>Apuesta</th>
+                        <th>Resultado</th>
+                        <th>Cuota</th>
+                        <th>Value</th>
+                        <th>Stake</th>
+                        <th>Beneficio</th>
+                        <th>Explicación</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+        
+        bettingDetails.forEach(bet => {
+            html += `
+                <tr class="${bet.won ? 'winning-bet' : 'losing-bet'}">
+                    <td>${bet.date}</td>
+                    <td>
+                        <strong>${bet.home_team}</strong> vs <strong>${bet.away_team}</strong><br>
+                        <small>${bet.home_goals}-${bet.away_goals}</small>
+                    </td>
+                    <td>${bet.market.toUpperCase()}</td>
+                    <td>
+                        ${bet.bet_type.toUpperCase()}
+                        ${bet.line ? ` (${bet.line})` : ''}
+                    </td>
+                    <td>
+                        <span class="${bet.won ? 'win' : 'loss'}">
+                            ${bet.won ? '✅ WIN' : '❌ LOSS'}
+                        </span>
+                    </td>
+                    <td>${bet.odds}</td>
+                    <td>${(bet.value * 100).toFixed(1)}%</td>
+                    <td>€${bet.stake_amount} (${bet.stake_level})</td>
+                    <td class="${bet.profit > 0 ? 'profit' : 'loss'}">
+                        €${bet.profit.toFixed(2)}
+                    </td>
+                    <td><small>${bet.explanation}</small></td>
+                </tr>
+            `;
+        });
+        
+        html += '</tbody></table>';
+        return html;
+    }
+    </script>
+
     <style>
-    /* Estilos para la página de benchmarking */
-    .ft-progress-bar {
-        width: 100%;
-        height: 20px;
-        background: #f0f0f0;
-        border-radius: 10px;
-        overflow: hidden;
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
         margin: 20px 0;
     }
     
-    .ft-progress-fill {
+    .summary-item {
+        text-align: center;
+        padding: 20px;
+        background: #f9f9f9;
+        border-radius: 8px;
+    }
+    
+    .big-number {
+        display: block;
+        font-size: 2em;
+        font-weight: bold;
+        margin-top: 10px;
+    }
+    
+    .big-number.positive { color: #00a32a; }
+    .big-number.negative { color: #d63638; }
+    
+    .positive { color: #00a32a; font-weight: bold; }
+    .negative { color: #d63638; font-weight: bold; }
+    
+    .benchmark-details-modal {
+        position: fixed;
+        z-index: 100000;
+        left: 0;
+        top: 0;
+        width: 100%;
         height: 100%;
-        background: #0073aa;
-        width: 0%;
-        transition: width 0.3s ease;
+        background-color: rgba(0,0,0,0.5);
     }
     
-    .ft-accuracy.ft-good { color: #00a32a; font-weight: bold; }
-    .ft-accuracy.ft-fair { color: #dba617; font-weight: bold; }
-    .ft-accuracy.ft-poor { color: #d63638; font-weight: bold; }
-    
-    .ft-roi.ft-positive { color: #00a32a; font-weight: bold; }
-    .ft-roi.ft-negative { color: #d63638; font-weight: bold; }
-    
-    .ft-model-badge {
-        padding: 3px 8px;
-        border-radius: 3px;
-        font-size: 12px;
+    .benchmark-details-modal .modal-content {
+        background-color: #fefefe;
+        margin: 2% auto;
+        padding: 20px;
+        border: 1px solid #888;
+        width: 95%;
+        max-height: 90vh;
+        overflow-y: auto;
+        border-radius: 8px;
     }
     
-    .ft-model-xg { background: #e6f3ff; color: #0066cc; }
-    .ft-model-basic { background: #f0f0f0; color: #666; }
+    .winning-bet { background-color: #f0f8f0; }
+    .losing-bet { background-color: #fdf0f0; }
     
-    .ft-detail-section { margin: 20px 0; }
-    .ft-detail-section h4 { margin-bottom: 10px; }
+    .win { color: #00a32a; font-weight: bold; }
+    .loss { color: #d63638; font-weight: bold; }
+    .profit { color: #00a32a; font-weight: bold; }
     
-    .ft-benchmark-details {
-        animation: slideIn 0.3s ease;
-    }
-    
-    @keyframes slideIn {
-        from { opacity: 0; transform: translateY(-20px); }
-        to { opacity: 1; transform: translateY(0); }
+    .season-info {
+        background: #e8f4fd;
+        border: 1px solid #0073aa;
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 4px;
     }
     </style>
-    
-    <script>
-    jQuery(document).ready(function($) {
-        // Formulario de benchmark
-        $('#ft-benchmark-form').on('submit', function(e) {
-            e.preventDefault();
-            console.log('EVENTO SUBMIT DISPARADO');	
-            
-            const season = $('#benchmark-season').val();
-            const modelType = $('#model-type').val();
-            const league = $('#benchmark-league').val() || 'all';
-            
-            if (!season) {
-                alert('Por favor selecciona una temporada');
-                return;
-            }
-            
-            console.log('Ejecutando benchmark:', {season, modelType, league});
-            
-            // Mostrar progreso
-            $('#ft-benchmark-progress').show();
-            $('#ft-benchmark-results').hide();
-            
-            // Simular progreso
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += Math.random() * 15;
-                if (progress > 90) progress = 90;
-                
-                $('.ft-progress-fill').css('width', progress + '%');
-                
-                if (progress < 30) {
-                    $('#ft-benchmark-status').text('Cargando datos históricos...');
-                } else if (progress < 60) {
-                    $('#ft-benchmark-status').text('Entrenando modelo sin temporada ' + season + '...');
-                } else if (progress < 90) {
-                    $('#ft-benchmark-status').text('Ejecutando predicciones...');
-                }
-            }, 500);
-            
-            // Ejecutar benchmark
-            $.ajax({
-                url: ajaxurl,
-                type: 'POST',
-                data: {
-                    action: 'ft_run_benchmark',
-                    nonce: jQuery('#ft_benchmark_nonce').val(),
-                    season: season,
-                    model_type: modelType,
-                    league: league
-                },
-                timeout: 300000, // 5 minutos
-                success: function(response) {
-                    clearInterval(progressInterval);
-                    $('.ft-progress-fill').css('width', '100%');
-                    $('#ft-benchmark-status').text('Completado!');
-                    
-                    if (response.success) {
-                        displayBenchmarkResults(response.data);
-                        setTimeout(() => location.reload(), 2000);
-                    } else {
-                        $('#ft-benchmark-results').html(
-                            '<div class="notice notice-error"><p>❌ Error: ' + response.data + '</p></div>'
-                        ).show();
-                    }
-                    
-                    setTimeout(() => {
-                        $('#ft-benchmark-progress').hide();
-                    }, 2000);
-                },
-                error: function(xhr, status, error) {
-                    clearInterval(progressInterval);
-                    $('#ft-benchmark-progress').hide();
-                    $('#ft-benchmark-results').html(
-                        '<div class="notice notice-error"><p>❌ Error de conexión: ' + error + '</p></div>'
-                    ).show();
-                }
-            });
-        });
-        
-        // Función para mostrar resultados
-        function displayBenchmarkResults(data) {
-            const metrics = data.test_metrics;
-            const valueBetting = data.value_betting;
-            
-            let html = '<h3>📊 Resultados del Benchmark</h3>';
-            html += '<div class="ft-benchmark-summary">';
-            
-            // Métricas principales
-            html += '<div class="ft-metrics-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">';
-            
-            html += '<div class="ft-metric-card" style="background: #f0f8ff; padding: 15px; border-radius: 5px; text-align: center;">';
-            html += '<h4>🎯 Precisión General</h4>';
-            html += '<div style="font-size: 24px; font-weight: bold; color: ' + (metrics.overall_accuracy > 0.55 ? '#00a32a' : (metrics.overall_accuracy > 0.45 ? '#dba617' : '#d63638')) + ';">';
-            html += (metrics.overall_accuracy * 100).toFixed(1) + '%</div>';
-            html += '<small>' + metrics.correct_predictions + ' / ' + metrics.total_predictions + ' partidos</small>';
-            html += '</div>';
-            
-            html += '<div class="ft-metric-card" style="background: #f0f8ff; padding: 15px; border-radius: 5px; text-align: center;">';
-            html += '<h4>🏠 Victorias Locales</h4>';
-            html += '<div style="font-size: 24px; font-weight: bold; color: #007cba;">';
-            html += (metrics.home_wins.accuracy * 100).toFixed(1) + '%</div>';
-            html += '<small>' + metrics.home_wins.correct + ' acertadas de ' + metrics.home_wins.total + ' totales</small>';
-            html += '</div>';
-            
-            html += '<div class="ft-metric-card" style="background: #f0f8ff; padding: 15px; border-radius: 5px; text-align: center;">';
-            html += '<h4>🤝 Empates</h4>';
-            html += '<div style="font-size: 24px; font-weight: bold; color: #dba617;">';
-            html += (metrics.draws.accuracy * 100).toFixed(1) + '%</div>';
-            html += '<small>' + metrics.draws.correct + ' acertados de ' + metrics.draws.total + ' totales</small>';
-            html += '</div>';
-            
-            html += '<div class="ft-metric-card" style="background: #f0f8ff; padding: 15px; border-radius: 5px; text-align: center;">';
-            html += '<h4>✈️ Victorias Visitantes</h4>';
-            html += '<div style="font-size: 24px; font-weight: bold; color: #8b2985;">';
-            html += (metrics.away_wins.accuracy * 100).toFixed(1) + '%</div>';
-            html += '<small>' + metrics.away_wins.correct + ' acertadas de ' + metrics.away_wins.total + ' totales</small>';
-            html += '</div>';
-            
-            html += '</div>';
-            
-            // Value Betting Results
-            html += '<div class="ft-value-betting-results" style="background: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">';
-            html += '<h4>💰 Simulación Value Betting</h4>';
-            html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;">';
-            
-            html += '<div><strong>Bankroll inicial:</strong> €' + (valueBetting.initial_bankroll || 1000) + '</div>';
-            html += '<div><strong>Bankroll final:</strong> €' + (valueBetting.final_bankroll || 0) + '</div>';
-            html += '<div><strong>Total apuestas:</strong> ' + valueBetting.total_bets + '</div>';
-            html += '<div><strong>Apuestas ganadoras:</strong> ' + valueBetting.winning_bets + '</div>';
-            html += '<div><strong>Win Rate:</strong> ' + (valueBetting.win_rate * 100).toFixed(1) + '%</div>';
-            html += '<div><strong>ROI:</strong> <span style="color: ' + (valueBetting.roi > 0 ? '#00a32a' : '#d63638') + ';">' + valueBetting.roi.toFixed(1) + '%</span></div>';
-            html += '<div><strong>Beneficio:</strong> <span style="color: ' + (valueBetting.profit_loss > 0 ? '#00a32a' : '#d63638') + ';">€' + valueBetting.profit_loss.toFixed(2) + '</span></div>';
-            
-            html += '</div>';
-            html += '</div>';
-            
-            html += '</div>';
-            
-            $('#ft-benchmark-results').html(html).show();
-        }
-        
-        // Ver detalles de benchmark
-        $(document).on('click', '.ft-view-details', function() {
-            const benchmarkId = $(this).data('benchmark-id');
-            
-            $.ajax({
-                url: ajaxurl,
-                type: 'POST',
-                data: {
-                    action: 'ft_get_benchmark_details',
-                    nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>',
-                    benchmark_id: benchmarkId
-                },
-                success: function(response) {
-                    if (response.success) {
-                        showBenchmarkDetails(response.data);
-                    }
-                }
-            });
-        });
-        
-        // Función completa para mostrar detalles
-        function showBenchmarkDetails(data) {
-            const benchmark = data.benchmark;
-            const metadata = data.metadata || {};
-            const bettingDetails = data.betting_details || [];
-            
-            let html = '<div class="ft-benchmark-details" style="background: white; padding: 20px; border: 1px solid #ddd; border-radius: 8px; margin: 20px 0; max-width: 100%; overflow: auto;">';
-            html += '<h3>📊 Detalles del Benchmark - ' + benchmark.season + '</h3>';
-            
-            // Información general
-            html += '<div class="ft-detail-section">';
-            html += '<h4>ℹ️ Información General</h4>';
-            html += '<table class="widefat">';
-            html += '<tr><td><strong>Temporada:</strong></td><td>' + benchmark.season + '</td></tr>';
-            html += '<tr><td><strong>Tipo de Modelo:</strong></td><td>' + benchmark.model_type + '</td></tr>';
-            html += '<tr><td><strong>Fecha de Prueba:</strong></td><td>' + benchmark.test_date + '</td></tr>';
-            html += '<tr><td><strong>Total Predicciones:</strong></td><td>' + benchmark.total_predictions + '</td></tr>';
-            html += '<tr><td><strong>Predicciones Correctas:</strong></td><td>' + benchmark.correct_predictions + '</td></tr>';
-            html += '<tr><td><strong>Precisión General:</strong></td><td>' + (benchmark.overall_accuracy * 100).toFixed(2) + '%</td></tr>';
-            html += '</table>';
-            html += '</div>';
-            
-            // Métricas detalladas
-            if (metadata.full_metrics) {
-                const metrics = metadata.full_metrics;
-                html += '<div class="ft-detail-section">';
-                html += '<h4>📈 Métricas Detalladas</h4>';
-                html += '<table class="widefat">';
-                html += '<tr><td><strong>Victorias Locales:</strong></td><td>' + (metrics.home_wins.accuracy * 100).toFixed(2) + '% (' + metrics.home_wins.correct + '/' + metrics.home_wins.total + ')</td></tr>';
-                html += '<tr><td><strong>Empates:</strong></td><td>' + (metrics.draws.accuracy * 100).toFixed(2) + '% (' + metrics.draws.correct + '/' + metrics.draws.total + ')</td></tr>';
-                html += '<tr><td><strong>Victorias Visitantes:</strong></td><td>' + (metrics.away_wins.accuracy * 100).toFixed(2) + '% (' + metrics.away_wins.correct + '/' + metrics.away_wins.total + ')</td></tr>';
-                html += '</table>';
-                html += '</div>';
-            }
-            
-            // Value Betting
-            if (metadata.full_value_betting) {
-                const vb = metadata.full_value_betting;
-                html += '<div class="ft-detail-section">';
-                html += '<h4>💰 Value Betting Detallado</h4>';
-                html += '<table class="widefat">';
-                html += '<tr><td><strong>Bankroll Inicial:</strong></td><td>€' + (vb.initial_bankroll || 1000) + '</td></tr>';
-                html += '<tr><td><strong>Bankroll Final:</strong></td><td>€' + (vb.final_bankroll || 0) + '</td></tr>';
-                html += '<tr><td><strong>Total Apuestas:</strong></td><td>' + vb.total_bets + '</td></tr>';
-                html += '<tr><td><strong>Apuestas Ganadoras:</strong></td><td>' + vb.winning_bets + '</td></tr>';
-                html += '<tr><td><strong>Win Rate:</strong></td><td>' + (vb.win_rate * 100).toFixed(1) + '%</td></tr>';
-                html += '<tr><td><strong>ROI:</strong></td><td style="color: ' + (vb.roi > 0 ? '#00a32a' : '#d63638') + ';">' + vb.roi.toFixed(2) + '%</td></tr>';
-                html += '<tr><td><strong>Beneficio/Pérdida:</strong></td><td style="color: ' + (vb.profit_loss > 0 ? '#00a32a' : '#d63638') + ';">€' + vb.profit_loss.toFixed(2) + '</td></tr>';
-                html += '</table>';
-                html += '</div>';
-            }
-            // Añadir en la función showBenchmarkDetails después de la sección de Value Betting
-if (vb.stakes_distribution) {
-    html += '<h5>📊 Distribución de Stakes:</h5>';
-    html += '<table class="widefat" style="font-size: 12px;">';
-    html += '<tr><th>Stake</th><th>Apuestas</th><th>ROI</th><th>Profit</th></tr>';
-    
-    for (let i = 1; i <= 5; i++) {
-        const count = vb.stakes_distribution[i] || 0;
-        const roi = vb.stakes_roi[i] || 0;
-        const profit = vb.stakes_profit[i] || 0;
-        
-        if (count > 0) {
-            html += '<tr>';
-            html += '<td>Stake ' + i + '</td>';
-            html += '<td>' + count + '</td>';
-            html += '<td style="color: ' + (roi > 0 ? 'green' : 'red') + ';">' + roi.toFixed(1) + '%</td>';
-            html += '<td style="color: ' + (profit > 0 ? 'green' : 'red') + ';">€' + profit.toFixed(2) + '</td>';
-            html += '</tr>';
-        }
-    }
-    
-    html += '</table>';
-}
-            // Detalle de apuestas si está disponible
-            if (bettingDetails && bettingDetails.length > 0) {
-                html += '<div class="ft-detail-section">';
-                html += '<h4>📝 Detalle de Apuestas (' + bettingDetails.length + ' apuestas)</h4>';
-                html += '<div style="max-height: 400px; overflow-y: auto;">';
-                html += '<table class="widefat" style="font-size: 12px;">';
-                html += '<thead>';
-                html += '<tr>';
-                html += '<th>Fecha</th>';
-                html += '<th>Partido</th>';
-                html += '<th>Predicción</th>';
-                html += '<th>Resultado</th>';
-                html += '<th>Cuota</th>';
-                html += '<th>Confianza</th>';
-                html += '<th>Value</th>';
-                html += '<th>Ganancia</th>';
-                html += '</tr>';
-                html += '</thead>';
-                html += '<tbody>';
-                
-                bettingDetails.forEach(function(bet) {
-                    const rowClass = bet.won ? 'style="background-color: #d4edda;"' : 'style="background-color: #f8d7da;"';
-                    html += '<tr ' + rowClass + '>';
-                    html += '<td>' + bet.date + '</td>';
-                    html += '<td>' + bet.home_team + ' vs ' + bet.away_team + '</td>';
-                    html += '<td><strong>' + bet.prediction + '</strong></td>';
-                    html += '<td>' + bet.actual_result + '</td>';
-                    html += '<td>' + bet.odds + '</td>';
-                    html += '<td>' + (bet.confidence * 100).toFixed(1) + '%</td>';
-                    html += '<td>' + (bet.value * 100).toFixed(1) + '%</td>';
-                    html += '<td style="color: ' + (bet.profit > 0 ? 'green' : 'red') + ';">€' + bet.profit.toFixed(2) + '</td>';
-                    html += '</tr>';
-                });
-                
-                html += '</tbody>';
-                html += '</table>';
-                html += '</div>';
-                html += '</div>';
-            }
-            
-            html += '<button class="button" onclick="jQuery(this).closest(\'.ft-benchmark-details\').remove()">✖️ Cerrar</button>';
-            html += '</div>';
-            
-            $('.ft-benchmark-history').after(html);
-        }
-        
-        // Otras acciones
-        $('#ft-compare-models').on('click', function() {
-            $.ajax({
-                url: ajaxurl,
-                type: 'POST',
-                data: {
-                    action: 'ft_compare_models',
-                    nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>'
-                },
-                success: function(response) {
-                    if (response.success) {
-                        displayModelComparison(response.data);
-                    }
-                }
-            });
-        });
-        
-        $('#ft-clear-old-benchmarks').on('click', function() {
-            if (!confirm('¿Eliminar benchmarks de más de 30 días?')) return;
-            
-            $.ajax({
-                url: ajaxurl,
-                type: 'POST',
-                data: {
-                    action: 'ft_clear_benchmarks',
-                    nonce: '<?php echo wp_create_nonce('ft_nonce'); ?>'
-                },
-                success: function(response) {
-                    if (response.success) {
-                        alert(response.data.message);
-                        location.reload();
-                    }
-                }
-            });
-        });
-    });
-
-  // Función para mostrar comparación de modelos
-        function displayModelComparison(data) {
-            let html = '<h3>📊 Comparación de Modelos</h3>';
-            
-            if (data.with_xg && data.without_xg) {
-                const accDiff = (data.with_xg.overall_accuracy - data.without_xg.overall_accuracy) * 100;
-                const roiDiff = data.with_xg.value_betting_roi - data.without_xg.value_betting_roi;
-                
-                html += '<table class="widefat">';
-                html += '<thead><tr><th>Métrica</th><th>Con xG</th><th>Sin xG</th><th>Diferencia</th></tr></thead>';
-                html += '<tbody>';
-                html += '<tr><td>Precisión General</td>';
-                html += '<td>' + (data.with_xg.overall_accuracy * 100).toFixed(1) + '%</td>';
-                html += '<td>' + (data.without_xg.overall_accuracy * 100).toFixed(1) + '%</td>';
-                html += '<td style="color: ' + (accDiff > 0 ? 'green' : 'red') + ';">' + (accDiff > 0 ? '+' : '') + accDiff.toFixed(1) + '%</td>';
-                html += '</tr>';
-                html += '<tr><td>ROI</td>';
-                html += '<td>' + data.with_xg.value_betting_roi.toFixed(1) + '%</td>';
-                html += '<td>' + data.without_xg.value_betting_roi.toFixed(1) + '%</td>';
-                html += '<td style="color: ' + (roiDiff > 0 ? 'green' : 'red') + ';">' + (roiDiff > 0 ? '+' : '') + roiDiff.toFixed(1) + '%</td>';
-                html += '</tr>';
-                html += '</tbody></table>';
-            } else {
-                html += '<p>No hay suficientes datos para comparar.</p>';
-            }
-            
-            $('#ft-comparison-content').html(html);
-            $('#ft-model-comparison').show();
-        }
-        
-        // Quick benchmark
-        $('#ft-quick-benchmark').on('click', function() {
-            const firstSeason = $('#benchmark-season option:nth-child(2)').val();
-            if (!firstSeason) {
-                alert('No hay temporadas disponibles');
-                return;
-            }
-            $('#benchmark-season').val(firstSeason);
-            $('#model-type').val('with_xg');
-            $('#ft-benchmark-form').submit();
-        });
-  
-      
-    </script>
     <?php
 }
     /**

@@ -25,6 +25,7 @@ class FT_Ajax_Handlers {
         
         add_action('wp_ajax_nopriv_ft_predict_match', array(__CLASS__, 'predict_match'));
         add_action('wp_ajax_ft_predict_match', array(__CLASS__, 'predict_match'));
+		add_action('wp_ajax_ft_run_advanced_benchmark', array('FT_Ajax_Handlers', 'run_advanced_benchmark'));
         
         // Handlers admin (requieren login)
         add_action('wp_ajax_ft_train_model', array(__CLASS__, 'train_model'));
@@ -35,7 +36,96 @@ class FT_Ajax_Handlers {
         add_action('wp_ajax_ft_get_prediction_history', array(__CLASS__, 'get_prediction_history'));
         add_action('wp_ajax_ft_get_model_performance', array(__CLASS__, 'get_model_performance'));
     }
-    
+   /**
+ * Ejecutar benchmark avanzado
+ */
+/**
+ * Ejecutar benchmark avanzado con mejor manejo de errores
+ */
+/**
+ * Ejecutar benchmark avanzado con mejor manejo de errores
+ */
+public static function run_advanced_benchmark() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Sin permisos');
+        return;
+    }
+
+    check_ajax_referer('ft_nonce', 'nonce');
+
+    try {
+        $season = sanitize_text_field($_POST['season']);
+        
+        if (empty($season)) {
+            wp_send_json_error('Debes seleccionar una temporada');
+            return;
+        }
+
+        // Verificar que tenemos datos para la temporada
+        global $wpdb;
+        $table = $wpdb->prefix . 'ft_matches_advanced';
+        $count = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table WHERE season = %s AND fthg IS NOT NULL AND ftag IS NOT NULL",
+            $season
+        ));
+        
+        if ($count < 10) {
+            wp_send_json_error("Datos insuficientes para la temporada $season (solo $count partidos encontrados)");
+            return;
+        }
+
+        // Verificar que existe la tabla de benchmarks avanzados
+        $benchmark_table = $wpdb->prefix . 'ft_benchmarks_advanced';
+        $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$benchmark_table'");
+        
+        if (!$table_exists) {
+            wp_send_json_error("La tabla $benchmark_table no existe. Contacta al administrador.");
+            return;
+        }
+
+        // Usar el benchmarking básico por ahora
+        if (!class_exists('FT_Benchmarking')) {
+            require_once FT_PLUGIN_PATH . 'includes/class-benchmarking.php';
+        }
+
+        $benchmarking = new FT_Benchmarking();
+        $model_type = sanitize_text_field($_POST['model_type'] ?? 'with_xg');
+        $league = sanitize_text_field($_POST['league'] ?? 'all');
+        
+        $result = $benchmarking->run_season_benchmark($season, $model_type, $league);
+
+        if (isset($result['error'])) {
+            wp_send_json_error($result['error']);
+        } else {
+            // Formatear resultado para mostrar
+            $summary = [
+                'season' => $season,
+                'total_bets' => $result['value_betting']['total_bets'] ?? 0,
+                'roi' => round($result['value_betting']['roi'] ?? 0, 1),
+                'profit' => round($result['value_betting']['profit_loss'] ?? 0, 2),
+                'win_rate' => round(($result['value_betting']['win_rate'] ?? 0) * 100, 1),
+                'accuracy' => round($result['test_metrics']['overall_accuracy'] * 100, 1),
+                'market_breakdown' => [],
+                'betting_details_count' => count($result['betting_details'] ?? [])
+            ];
+
+            wp_send_json_success([
+                'message' => 'Benchmark completado exitosamente',
+                'summary' => $summary,
+                'full_result' => $result
+            ]);
+        }
+
+    } catch (Exception $e) {
+        error_log('FT Advanced Benchmark Error: ' . $e->getMessage());
+        wp_send_json_error('Error interno: ' . $e->getMessage());
+    }
+}
+
+
+// Registrar el handler
+
+ 
     /**
      * Obtener lista de equipos
      */
@@ -568,6 +658,38 @@ class FT_Ajax_Handlers {
         return $html;
     }
 }
+/**
+ * AJAX Handler para verificar datos de temporada
+ */
+public static function verify_season_data() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Sin permisos');
+        return;
+    }
+
+    check_ajax_referer('ft_nonce', 'nonce');
+
+    try {
+        if (!class_exists('FT_Benchmarking_Advanced')) {
+            require_once FT_PLUGIN_PATH . 'includes/class-benchmarking-advanced.php';
+        }
+
+        $benchmarking = new FT_Benchmarking_Advanced();
+        $season = sanitize_text_field($_POST['season'] ?? '');
+
+        if ($season) {
+            $data = $benchmarking->verify_season_data_detailed($season);
+        } else {
+            $data = $benchmarking->verify_season_data_detailed();
+        }
+
+        wp_send_json_success($data);
+
+    } catch (Exception $e) {
+        wp_send_json_error('Error: ' . $e->getMessage());
+    }
+}
 
 // Registrar los handlers
 add_action('init', array('FT_Ajax_Handlers', 'init'));
+add_action('wp_ajax_ft_verify_season_data', array('FT_Ajax_Handlers', 'verify_season_data'));
