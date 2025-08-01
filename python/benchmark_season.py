@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Football Tipster - Benchmark Avanzado con U/O, AH y análisis detallado
+Football Tipster - Benchmark con sistema de stake variable (1-5)
 """
 
 import sys
@@ -18,99 +18,77 @@ if plugin_libs not in sys.path:
 
 import mysql.connector
 from sklearn.ensemble import RandomForestClassifier
-from scipy.stats import poisson
-import math
 
-def load_value_config(cursor, table_prefix):
-    """
-    Carga configuración de value betting desde la tabla ft_value_config
-    """
-    config_table = f"{table_prefix}ft_value_config"
-    try:
-        cursor.execute(f"SELECT * FROM {config_table} LIMIT 1")
-        config = cursor.fetchone()
-        
-        if config:
-            return {
-                'min_value': float(config[1]) / 100,  # min_value está en porcentaje
-                'min_confidence': float(config[2]),
-                'max_stake_percentage': float(config[3]) / 100,
-                'kelly_fraction': float(config[4]),
-                'markets_enabled': config[5].split(',') if config[5] else ['moneyline'],
-                'auto_analyze': bool(config[6]),
-                'min_odds': float(config[7]),
-                'max_odds': float(config[8]),
-                'stake_system': config[9],
-                'base_unit': float(config[10]),
-                'max_daily_bets': int(config[11]),
-                'stop_loss_daily': float(config[12]),
-                'stop_loss_weekly': float(config[13]),
-                'min_bankroll_percentage': float(config[14]) / 100,
-                'avoid_teams': json.loads(config[15]) if config[15] else [],
-                'preferred_leagues': json.loads(config[16]) if config[16] else [],
-                'time_restrictions': json.loads(config[17]) if config[17] else {},
-                'streak_protection': bool(config[18]),
-                # Nuevas opciones
-                'exclude_draws': False,  # Se puede configurar desde PHP
-                'include_over_under': True,
-                'include_asian_handicap': True
-            }
-        else:
-            return {
-                'min_value': 0.10,
-                'min_confidence': 0.40,
-                'min_odds': 1.6,
-                'max_odds': 4.0,
-                'base_unit': 10,
-                'stake_system': 'variable',
-                'exclude_draws': False,
-                'include_over_under': True,
-                'include_asian_handicap': True
-            }
-    except Exception as e:
-        print(f"Error cargando configuración: {e}")
-        return {
-            'min_value': 0.10,
-            'min_confidence': 0.40,
-            'min_odds': 1.6,
-            'max_odds': 4.0,
-            'base_unit': 10,
-            'stake_system': 'variable',
-            'exclude_draws': False,
-            'include_over_under': True,
-            'include_asian_handicap': True
-        }
 
-def calculate_over_under_probability(home_xg, away_xg, line=2.5):
-    """
-    Calcula probabilidad Over/Under usando distribución de Poisson
-    """
-    total_expected = home_xg + away_xg
-    
-    # Usar Poisson para calcular probabilidades exactas
-    prob_under = 0
-    for goals in range(int(line) + 1):
-        if goals <= line:
-            prob_under += poisson.pmf(goals, total_expected)
-    
-    prob_over = 1 - prob_under
-    return prob_over, prob_under
 
-def calculate_asian_handicap_probability(home_xg, away_xg, handicap):
+def calculate_stake(value, confidence, min_stake=1, max_stake=5):
     """
-    Calcula probabilidad Asian Handicap usando simulación Monte Carlo simplificada
+    Calcula el stake (1-5) basado en value y confianza
+    
+    Sistema:
+    - Value es el factor principal (60% del peso)
+    - Confianza es el factor secundario (40% del peso)
+    
+    Stake 1: Value 10-15% y Confianza 40-45%
+    Stake 2: Value 15-20% y Confianza 45-50%
+    Stake 3: Value 20-25% y Confianza 50-55%
+    Stake 4: Value 25-30% y Confianza 55-60%
+    Stake 5: Value >30% y Confianza >60%
     """
-    # Simulación simple basada en diferencia esperada de goles
-    expected_diff = home_xg - away_xg
     
-    # Ajustar por handicap
-    adjusted_diff = expected_diff - handicap
+    # Calcular score de value (0-10)
+    if value < 0.10:
+        value_score = 0
+    elif value < 0.15:
+        value_score = 2
+    elif value < 0.20:
+        value_score = 4
+    elif value < 0.25:
+        value_score = 6
+    elif value < 0.30:
+        value_score = 8
+    else:
+        value_score = 10
     
-    # Usar función logística para convertir diferencia en probabilidad
-    home_prob = 1 / (1 + math.exp(-adjusted_diff * 2))  # Factor 2 para sensibilidad
-    away_prob = 1 - home_prob
+    # Calcular score de confianza (0-10)
+    if confidence < 0.40:
+        confidence_score = 0
+    elif confidence < 0.45:
+        confidence_score = 2
+    elif confidence < 0.50:
+        confidence_score = 4
+    elif confidence < 0.55:
+        confidence_score = 6
+    elif confidence < 0.60:
+        confidence_score = 8
+    else:
+        confidence_score = 10
     
-    return home_prob, away_prob
+    # Combinar scores (60% value, 40% confianza)
+    combined_score = (value_score * 0.6) + (confidence_score * 0.4)
+    
+    # Convertir a stake 1-5
+    if combined_score < 2:
+        stake = 1
+    elif combined_score < 4:
+        stake = 2
+    elif combined_score < 6:
+        stake = 3
+    elif combined_score < 8:
+        stake = 4
+    else:
+        stake = 5
+    
+    # Aplicar límites adicionales de seguridad
+    # No apostar stake 5 a cuotas muy altas (riesgo)
+    if stake == 5 and value < 0.25:
+        stake = 4
+    
+    # No apostar stake alto si la confianza es muy baja
+    if stake >= 4 and confidence < 0.50:
+        stake = 3
+    
+    return stake
 
 def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last_n_games=10):
     """
@@ -118,7 +96,7 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
     """
     if is_home:
         query = f"""
-        SELECT
+        SELECT 
             COUNT(*) as matches,
             SUM(CASE WHEN ftr = 'H' THEN 1 ELSE 0 END) as wins,
             SUM(CASE WHEN ftr = 'D' THEN 1 ELSE 0 END) as draws,
@@ -127,9 +105,9 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
             AVG(hs) as avg_shots,
             AVG(hst) as avg_shots_target,
             AVG(hc) as avg_corners,
-            AVG(COALESCE(home_xg, fthg * 1.1)) as avg_xg
+            AVG(hf) as avg_fouls
         FROM {table_name}
-        WHERE home_team = %s
+        WHERE home_team = %s 
         AND date < %s
         AND date >= DATE_SUB(%s, INTERVAL 365 DAY)
         AND ftr IS NOT NULL
@@ -138,7 +116,7 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
         """
     else:
         query = f"""
-        SELECT
+        SELECT 
             COUNT(*) as matches,
             SUM(CASE WHEN ftr = 'A' THEN 1 ELSE 0 END) as wins,
             SUM(CASE WHEN ftr = 'D' THEN 1 ELSE 0 END) as draws,
@@ -147,9 +125,9 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
             AVG(as_shots) as avg_shots,
             AVG(ast) as avg_shots_target,
             AVG(ac) as avg_corners,
-            AVG(COALESCE(away_xg, ftag * 1.1)) as avg_xg
+            AVG(af) as avg_fouls
         FROM {table_name}
-        WHERE away_team = %s
+        WHERE away_team = %s 
         AND date < %s
         AND date >= DATE_SUB(%s, INTERVAL 365 DAY)
         AND ftr IS NOT NULL
@@ -170,7 +148,7 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
             'avg_shots': float(result[5]) if result[5] else 10.0,
             'avg_shots_target': float(result[6]) if result[6] else 4.0,
             'avg_corners': float(result[7]) if result[7] else 5.0,
-            'avg_xg': float(result[8]) if result[8] else 1.5
+            'avg_fouls': float(result[8]) if result[8] else 12.0
         }
     else:
         return {
@@ -182,8 +160,36 @@ def get_team_historical_stats(cursor, table_name, team, date, is_home=True, last
             'avg_shots': 10.0,
             'avg_shots_target': 4.0,
             'avg_corners': 5.0,
-            'avg_xg': 1.5
+            'avg_fouls': 12.0
         }
+
+def get_recent_form(cursor, table_name, team, date, last_n=5):
+    """
+    Obtiene la forma reciente del equipo
+    """
+    query = f"""
+    SELECT 
+        CASE 
+            WHEN home_team = %s AND ftr = 'H' THEN 3
+            WHEN away_team = %s AND ftr = 'A' THEN 3
+            WHEN ftr = 'D' THEN 1
+            ELSE 0
+        END as points
+    FROM {table_name}
+    WHERE (home_team = %s OR away_team = %s)
+    AND date < %s
+    AND ftr IS NOT NULL
+    ORDER BY date DESC
+    LIMIT %s
+    """
+    
+    cursor.execute(query, (team, team, team, team, date, last_n))
+    results = cursor.fetchall()
+    
+    if results:
+        points = [r[0] for r in results]
+        return sum(points) / len(points)
+    return 1.0
 
 def prepare_features_for_match(cursor, table_name, home_team, away_team, match_date):
     """
@@ -191,9 +197,11 @@ def prepare_features_for_match(cursor, table_name, home_team, away_team, match_d
     """
     home_stats_as_home = get_team_historical_stats(cursor, table_name, home_team, match_date, True)
     home_stats_as_away = get_team_historical_stats(cursor, table_name, home_team, match_date, False)
+    home_form = get_recent_form(cursor, table_name, home_team, match_date)
     
     away_stats_as_home = get_team_historical_stats(cursor, table_name, away_team, match_date, True)
     away_stats_as_away = get_team_historical_stats(cursor, table_name, away_team, match_date, False)
+    away_form = get_recent_form(cursor, table_name, away_team, match_date)
     
     features = [
         home_stats_as_home['win_rate'],
@@ -203,7 +211,7 @@ def prepare_features_for_match(cursor, table_name, home_team, away_team, match_d
         home_stats_as_home['avg_shots'],
         home_stats_as_home['avg_shots_target'],
         home_stats_as_home['avg_corners'],
-        home_stats_as_home['avg_xg'],
+        home_form,
         
         away_stats_as_away['win_rate'],
         away_stats_as_away['draw_rate'],
@@ -212,280 +220,84 @@ def prepare_features_for_match(cursor, table_name, home_team, away_team, match_d
         away_stats_as_away['avg_shots'],
         away_stats_as_away['avg_shots_target'],
         away_stats_as_away['avg_corners'],
-        away_stats_as_away['avg_xg'],
+        away_form,
         
         home_stats_as_home['avg_goals_for'] - away_stats_as_away['avg_goals_against'],
         away_stats_as_away['avg_goals_for'] - home_stats_as_home['avg_goals_against'],
         home_stats_as_home['avg_shots'] - away_stats_as_away['avg_shots'],
-        home_stats_as_home['avg_xg'] - away_stats_as_away['avg_xg']
+        home_form - away_form
     ]
     
-    # Retornar también las estadísticas para cálculos posteriores
-    return features, {
-        'home_xg': home_stats_as_home['avg_xg'],
-        'away_xg': away_stats_as_away['avg_xg'],
-        'home_goals': home_stats_as_home['avg_goals_for'],
-        'away_goals': away_stats_as_away['avg_goals_for']
-    }
+    return features
 
-def calculate_stake(value, confidence, base_unit=10, min_stake=1, max_stake=5):
+def load_value_config(cursor, table_prefix):
     """
-    Calcula stake basado en value y confianza (1-5)
+    Carga la configuración de value betting desde la base de datos
     """
-    # Score de value (0-10)
-    if value < 0.10:
-        value_score = 0
-    elif value < 0.15:
-        value_score = 2
-    elif value < 0.20:
-        value_score = 4
-    elif value < 0.25:
-        value_score = 6
-    elif value < 0.30:
-        value_score = 8
-    else:
-        value_score = 10
-
-    # Score de confianza (0-10)
-    if confidence < 0.40:
-        confidence_score = 0
-    elif confidence < 0.45:
-        confidence_score = 2
-    elif confidence < 0.50:
-        confidence_score = 4
-    elif confidence < 0.55:
-        confidence_score = 6
-    elif confidence < 0.60:
-        confidence_score = 8
-    else:
-        confidence_score = 10
-
-    # Combinar scores (60% value, 40% confianza)
-    combined_score = (value_score * 0.6) + (confidence_score * 0.4)
-
-    # Convertir a stake 1-5
-    if combined_score < 2:
-        stake = 1
-    elif combined_score < 4:
-        stake = 2
-    elif combined_score < 6:
-        stake = 3
-    elif combined_score < 8:
-        stake = 4
-    else:
-        stake = 5
-
-    # Aplicar límites de seguridad
-    if stake == 5 and value < 0.25:
-        stake = 4
+    config_table = f"{table_prefix}ft_value_config"
     
-    if stake >= 4 and confidence < 0.50:
-        stake = 3
-
-    return stake
-
-def analyze_match_all_markets(match_data, prediction_stats, value_config):
-    """
-    Analiza un partido en todos los mercados (ML, O/U, AH)
-    """
-    match_date, home_team, away_team, result, home_goals, away_goals, odds_data = match_data
-    features, team_stats = prediction_stats
-    
-    # Obtener cuotas
-    odds_h = float(odds_data.get('b365h', 0)) if odds_data.get('b365h') else 0
-    odds_d = float(odds_data.get('b365d', 0)) if odds_data.get('b365d') else 0
-    odds_a = float(odds_data.get('b365a', 0)) if odds_data.get('b365a') else 0
-    
-    # Over/Under 2.5
-    odds_over25 = float(odds_data.get('b365over25', 0)) if odds_data.get('b365over25') else 0
-    odds_under25 = float(odds_data.get('b365under25', 0)) if odds_data.get('b365under25') else 0
-    
-    all_bets = []
-    
-    # 1. MONEYLINE (1X2)
-    if odds_h > 0 and odds_d > 0 and odds_a > 0:
-        # Usar predicción del modelo para probabilidades
-        ml_probs = [0.35, 0.25, 0.40]  # Simplificado - en tu caso usar el modelo real
-        
-        # Analizar cada resultado
-        outcomes = ['H', 'D', 'A']
-        ml_odds = [odds_h, odds_d, odds_a]
-        
-        for i, (outcome, our_prob, market_odd) in enumerate(zip(outcomes, ml_probs, ml_odds)):
-            if value_config['exclude_draws'] and outcome == 'D':
-                continue
-                
-            if value_config['min_odds'] <= market_odd <= value_config['max_odds']:
-                market_prob = 1 / market_odd
-                value = our_prob - market_prob
-                
-                if value >= value_config['min_value'] and our_prob >= value_config['min_confidence']:
-                    stake_level = calculate_stake(value, our_prob, value_config['base_unit'])
-                    stake_amount = value_config['base_unit'] * stake_level
-                    
-                    # Determinar resultado
-                    actual_result = result
-                    bet_won = (outcome == actual_result)
-                    profit = stake_amount * (market_odd - 1) if bet_won else -stake_amount
-                    
-                    # Explicación del por qué se apostó
-                    explanation = f"ML {outcome}: Prob={our_prob:.3f} vs Market={market_prob:.3f}, Value={value*100:.1f}%, Conf={our_prob:.3f}"
-                    
-                    all_bets.append({
-                        'date': str(match_date),
-                        'home_team': home_team,
-                        'away_team': away_team,
-                        'market': 'moneyline',
-                        'bet_type': outcome,
-                        'line': None,
-                        'prediction': outcome,
-                        'actual_result': actual_result,
-                        'our_probability': round(our_prob, 3),
-                        'market_probability': round(market_prob, 3),
-                        'odds': round(market_odd, 2),
-                        'value': round(value, 3),
-                        'stake_level': stake_level,
-                        'stake_amount': stake_amount,
-                        'profit': round(profit, 2),
-                        'won': bet_won,
-                        'explanation': explanation,
-                        'home_goals': home_goals,
-                        'away_goals': away_goals,
-                        'total_goals': home_goals + away_goals
-                    })
-    
-    # 2. OVER/UNDER 2.5
-    if value_config['include_over_under'] and odds_over25 > 0 and odds_under25 > 0:
-        home_xg = team_stats['home_xg']
-        away_xg = team_stats['away_xg']
-        
-        prob_over, prob_under = calculate_over_under_probability(home_xg, away_xg, 2.5)
-        
-        # Analizar OVER
-        if value_config['min_odds'] <= odds_over25 <= value_config['max_odds']:
-            market_prob_over = 1 / odds_over25
-            value_over = prob_over - market_prob_over
-            
-            if value_over >= value_config['min_value'] and prob_over >= value_config['min_confidence']:
-                stake_level = calculate_stake(value_over, prob_over, value_config['base_unit'])
-                stake_amount = value_config['base_unit'] * stake_level
-                
-                # Resultado Over/Under
-                total_goals = home_goals + away_goals
-                bet_won = total_goals > 2.5
-                profit = stake_amount * (odds_over25 - 1) if bet_won else -stake_amount
-                
-                explanation = f"O2.5: xG={home_xg:.1f}+{away_xg:.1f}={home_xg+away_xg:.1f}, Prob={prob_over:.3f} vs Market={market_prob_over:.3f}"
-                
-                all_bets.append({
-                    'date': str(match_date),
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'market': 'total',
-                    'bet_type': 'over',
-                    'line': 2.5,
-                    'prediction': 'over',
-                    'actual_result': 'over' if total_goals > 2.5 else 'under',
-                    'our_probability': round(prob_over, 3),
-                    'market_probability': round(market_prob_over, 3),
-                    'odds': round(odds_over25, 2),
-                    'value': round(value_over, 3),
-                    'stake_level': stake_level,
-                    'stake_amount': stake_amount,
-                    'profit': round(profit, 2),
-                    'won': bet_won,
-                    'explanation': explanation,
-                    'home_goals': home_goals,
-                    'away_goals': away_goals,
-                    'total_goals': total_goals,
-                    'expected_total': round(home_xg + away_xg, 2)
-                })
-        
-        # Analizar UNDER
-        if value_config['min_odds'] <= odds_under25 <= value_config['max_odds']:
-            market_prob_under = 1 / odds_under25
-            value_under = prob_under - market_prob_under
-            
-            if value_under >= value_config['min_value'] and prob_under >= value_config['min_confidence']:
-                stake_level = calculate_stake(value_under, prob_under, value_config['base_unit'])
-                stake_amount = value_config['base_unit'] * stake_level
-                
-                total_goals = home_goals + away_goals
-                bet_won = total_goals <= 2.5
-                profit = stake_amount * (odds_under25 - 1) if bet_won else -stake_amount
-                
-                explanation = f"U2.5: xG={home_xg:.1f}+{away_xg:.1f}={home_xg+away_xg:.1f}, Prob={prob_under:.3f} vs Market={market_prob_under:.3f}"
-                
-                all_bets.append({
-                    'date': str(match_date),
-                    'home_team': home_team,
-                    'away_team': away_team,
-                    'market': 'total',
-                    'bet_type': 'under',
-                    'line': 2.5,
-                    'prediction': 'under',
-                    'actual_result': 'over' if total_goals > 2.5 else 'under',
-                    'our_probability': round(prob_under, 3),
-                    'market_probability': round(market_prob_under, 3),
-                    'odds': round(odds_under25, 2),
-                    'value': round(value_under, 3),
-                    'stake_level': stake_level,
-                    'stake_amount': stake_amount,
-                    'profit': round(profit, 2),
-                    'won': bet_won,
-                    'explanation': explanation,
-                    'home_goals': home_goals,
-                    'away_goals': away_goals,
-                    'total_goals': total_goals,
-                    'expected_total': round(home_xg + away_xg, 2)
-                })
-    
-    return all_bets
-
-def main():
-    """Función principal del benchmark avanzado"""
-def get_available_seasons(cursor, table_prefix):
-    """
-    Obtiene temporadas disponibles desde la base de datos
-    """
-    table_name = f"{table_prefix}ft_matches_advanced"
     try:
-        cursor.execute(f"""
-            SELECT DISTINCT season 
-            FROM {table_name} 
-            WHERE season IS NOT NULL 
-            AND season != '' 
-            AND fthg IS NOT NULL 
-            AND ftag IS NOT NULL
-            GROUP BY season 
-            HAVING COUNT(*) > 100
-            ORDER BY season DESC
-        """)
-        seasons = cursor.fetchall()
-        return [season[0] for season in seasons]
-    except Exception as e:
-        print(f"Error obteniendo temporadas: {e}")
-        return []
+        cursor.execute(f"SELECT * FROM {config_table} LIMIT 1")
+        config = cursor.fetchone()
+        
+        if config:
+            return {
+                'min_value': float(config[1]) / 100,  # Convertir porcentaje a decimal
+                'min_confidence': float(config[2]),
+                'max_stake_percentage': float(config[3]) / 100,
+                'kelly_fraction': float(config[4]),
+                'markets_enabled': config[5].split(',') if config[5] else ['moneyline'],
+                'auto_analyze': bool(config[6]),
+                'min_odds': float(config[7]),
+                'max_odds': float(config[8]),
+                'stake_system': config[9],
+                'base_unit': float(config[10]),
+                'max_daily_bets': int(config[11]),
+                'stop_loss_daily': float(config[12]),
+                'stop_loss_weekly': float(config[13]),
+                'min_bankroll_percentage': float(config[14]) / 100,
+                'streak_protection': bool(config[18])
+            }
+        else:
+            # Valores por defecto si no hay configuración
+            return {
+                'min_value': 0.10,
+                'min_confidence': 0.40,
+                'min_odds': 1.6,
+                'max_odds': 4.0,
+                'base_unit': 10,
+                'stake_system': 'variable'
+            }
+    except:
+        # Valores por defecto en caso de error
+        return {
+            'min_value': 0.10,
+            'min_confidence': 0.40,
+            'min_odds': 1.6,
+            'max_odds': 4.0,
+            'base_unit': 10,
+            'stake_system': 'variable'
+        }
+
 
 def main():
-    """Función principal del benchmark avanzado"""
+    """Función principal del benchmark"""
     try:
         if len(sys.argv) < 3:
-            print(json.dumps({"error": "Uso: benchmark_advanced.py <season> <model_type> [league] [exclude_draws]"}))
+            print(json.dumps({"error": "Uso: benchmark_season.py <temporada> <tipo_modelo> [liga]"}))
             return
-
+        
         test_season = sys.argv[1]
         model_type = sys.argv[2]
         league_filter = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'all' else None
-        exclude_draws = sys.argv[4].lower() == 'true' if len(sys.argv) > 4 else False
-
+        
         # Cargar configuración
         with open('db_config.json', 'r') as f:
             db_config = json.load(f)
-
+        
         table_prefix = db_config.get('table_prefix', 'PP0Fhoci_')
         table_name = f"{table_prefix}ft_matches_advanced"
-
+        
         # Conectar a BD
         host = db_config['host']
         port = 3306
@@ -493,7 +305,7 @@ def main():
             host_parts = host.split(':')
             host = host_parts[0]
             port = int(host_parts[1])
-
+        
         conn = mysql.connector.connect(
             host=host,
             port=port,
@@ -501,75 +313,126 @@ def main():
             user=db_config['user'],
             password=db_config['password']
         )
-
         cursor = conn.cursor()
-        
-        # Verificar que la temporada existe
-        available_seasons = get_available_seasons(cursor, table_prefix)
-        if test_season not in available_seasons:
-            print(json.dumps({
-                "error": f"Temporada {test_season} no encontrada. Disponibles: {', '.join(available_seasons)}"
-            }))
-            return
-
         value_config = load_value_config(cursor, table_prefix)
-        value_config['exclude_draws'] = exclude_draws
-
-        # ENTRENAR MODELO (excluyendo temporada de test)
+        # Obtener rango de fechas
+        date_query = f"""
+        SELECT MIN(date) as min_date, MAX(date) as max_date
+        FROM {table_name}
+        WHERE season = %s
+        AND fthg IS NOT NULL
+        """
+        cursor.execute(date_query, (test_season,))
+        date_result = cursor.fetchone()
+        
+        if not date_result or not date_result[0]:
+            print(json.dumps({"error": f"No se encontraron datos para la temporada {test_season}"}))
+            return
+        
+        test_start_date = date_result[0]
+        
+        # ENTRENAMIENTO
         league_condition = f"AND division = '{league_filter}'" if league_filter else ""
         
         train_query = f"""
-        SELECT date, home_team, away_team, ftr
+        SELECT 
+            date, home_team, away_team, ftr
         FROM {table_name}
-        WHERE season != %s
-        AND season IS NOT NULL
+        WHERE date < %s
         AND ftr IN ('H', 'D', 'A')
-        AND home_team IS NOT NULL
+        AND home_team IS NOT NULL 
         AND away_team IS NOT NULL
         {league_condition}
         ORDER BY date DESC
-        LIMIT 3000
+        LIMIT 5000
         """
-
-        cursor.execute(train_query, (test_season,))
+        
+        cursor.execute(train_query, (test_start_date,))
         train_matches = cursor.fetchall()
-
+        
         if len(train_matches) < 500:
             print(json.dumps({"error": f"Datos de entrenamiento insuficientes: solo {len(train_matches)} partidos"}))
             return
-
-        # ... resto del código de entrenamiento igual ...
-
-
-        # Configuración de apuestas
+        
+        # Preparar features de entrenamiento
+        X_train = []
+        y_train = []
+        result_map = {'H': 2, 'D': 1, 'A': 0}
+        
+        for match_date, home_team, away_team, result in train_matches:
+            features = prepare_features_for_match(cursor, table_name, home_team, away_team, match_date)
+            X_train.append(features)
+            y_train.append(result_map[result])
+        
+        X_train = np.array(X_train)
+        y_train = np.array(y_train)
+        
+        # Entrenar modelo
+        model = RandomForestClassifier(
+            n_estimators=100,
+            max_depth=10,
+            min_samples_split=20,
+            min_samples_leaf=10,
+            random_state=42,
+            n_jobs=-1
+        )
+        model.fit(X_train, y_train)
+        
+        # EVALUACIÓN
+        test_query = f"""
+        SELECT 
+            date, home_team, away_team, ftr,
+            COALESCE(b365h, bwh) as odds_home,
+            COALESCE(b365d, bwd) as odds_draw,
+            COALESCE(b365a, bwa) as odds_away
+        FROM {table_name}
+        WHERE season = %s
+        AND ftr IN ('H', 'D', 'A')
+        AND home_team IS NOT NULL 
+        AND away_team IS NOT NULL
+        {league_condition}
+        ORDER BY date
+        """
+        
+        cursor.execute(test_query, (test_season,))
+        test_matches = cursor.fetchall()
+        
+        if not test_matches:
+            print(json.dumps({"error": f"No hay partidos para evaluar en {test_season}"}))
+            return
+        
+        # Evaluar predicciones y registrar apuestas
+        predictions = []
+        probabilities = []
+        y_test = []
+        betting_details = []
+        
+        # Configuración de apuestas con stake variable
         initial_bankroll = 1000
         current_bankroll = initial_bankroll
-        base_unit = value_config['base_unit']
+        base_unit = 10  # Unidad base de apuesta
         total_stakes = 0
         winning_bets = 0
         total_bets = 0
-
-        # Estadísticas por mercado
-        market_stats = {
-            'moneyline': {'bets': 0, 'wins': 0, 'profit': 0, 'stakes': 0},
-            'total': {'bets': 0, 'wins': 0, 'profit': 0, 'stakes': 0},
-            'spread': {'bets': 0, 'wins': 0, 'profit': 0, 'stakes': 0}
-        }
-
-        for match_data in test_matches:
-            match_date, home_team, away_team, result, home_goals, away_goals = match_data[:6]
-            odds_data = {
-                'b365h': match_data[6],
-                'b365d': match_data[7], 
-                'b365a': match_data[8],
-                'b365over25': None,  # Añadir si tienes estos campos
-                'b365under25': None
-            }
-
-            # Preparar features para predicción
-            features, team_stats = prepare_features_for_match(cursor, table_name, home_team, away_team, match_date)
+        
+        # Criterios de apuesta
+        # Usar la configuración en lugar de valores hardcodeados
+        min_value = value_config['min_value']
+        min_confidence = value_config['min_confidence']
+        min_odds = value_config['min_odds']
+        max_odds = value_config['max_odds']
+        base_unit = value_config['base_unit']
+        
+        # Estadísticas por stake
+        stakes_distribution = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        stakes_roi = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        stakes_profit = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        
+        for match_date, home_team, away_team, result, odds_h, odds_d, odds_a in test_matches:
+            # Preparar features
+            features = prepare_features_for_match(cursor, table_name, home_team, away_team, match_date)
             
-            # Hacer predicción
+            # Predecir
             pred = model.predict([features])[0]
             prob = model.predict_proba([features])[0]
             
@@ -577,62 +440,93 @@ def main():
             probabilities.append(prob)
             y_test.append(result_map[result])
             
-            # Analizar apuestas en todos los mercados
-            match_bets = analyze_match_all_markets(
-                (match_date, home_team, away_team, result, home_goals, away_goals, odds_data),
-                (features, team_stats),
-                value_config
-            )
-
-            # Procesar apuestas
-            for bet in match_bets:
-                total_bets += 1
-                total_stakes += bet['stake_amount']
-                market_stats[bet['market']]['bets'] += 1
-                market_stats[bet['market']]['stakes'] += bet['stake_amount']
+            # Procesar apuesta
+            if odds_h and odds_d and odds_a:
+                odds = [float(odds_a), float(odds_d), float(odds_h)]
                 
-                if bet['won']:
-                    winning_bets += 1
-                    current_bankroll += bet['profit']
-                    market_stats[bet['market']]['wins'] += 1
-                else:
-                    current_bankroll -= bet['stake_amount']
+                # Buscar la mejor apuesta
+                best_value = -1
+                best_bet = None
+                best_odd = None
+                best_confidence = 0
                 
-                market_stats[bet['market']]['profit'] += bet['profit']
-                bet['bankroll'] = round(current_bankroll, 2)
+                for outcome in range(3):
+                    if min_odds <= odds[outcome] <= max_odds:
+                        our_prob = prob[outcome]
+                        if our_prob >= min_confidence:
+                            market_prob = 1 / odds[outcome]
+                            value = our_prob - market_prob
+                            
+                            if value > best_value and value >= min_value:
+                                best_value = value
+                                best_bet = outcome
+                                best_odd = odds[outcome]
+                                best_confidence = our_prob
                 
-                all_betting_details.append(bet)
-
-        # Calcular métricas finales
+                # Realizar apuesta si hay value
+                if best_bet is not None:
+                    # Calcular stake variable (1-5)
+                    stake_level = calculate_stake(best_value, best_confidence)
+                    stake_amount = base_unit * stake_level
+                    
+                    total_bets += 1
+                    total_stakes += stake_amount
+                    stakes_distribution[stake_level] += 1
+                    
+                    bet_won = (best_bet == result_map[result])
+                    
+                    if bet_won:
+                        profit = stake_amount * (best_odd - 1)
+                        current_bankroll += profit
+                        winning_bets += 1
+                        stakes_profit[stake_level] += profit
+                    else:
+                        profit = -stake_amount
+                        current_bankroll -= stake_amount
+                        stakes_profit[stake_level] -= stake_amount
+                    
+                    # Guardar detalles
+                    betting_details.append({
+                        'date': str(match_date),
+                        'home_team': home_team,
+                        'away_team': away_team,
+                        'prediction': ['A', 'D', 'H'][best_bet],
+                        'actual_result': result,
+                        'odds': round(best_odd, 2),
+                        'stake_level': stake_level,
+                        'stake_amount': stake_amount,
+                        'confidence': round(best_confidence, 3),
+                        'value': round(best_value, 3),
+                        'profit': round(profit, 2),
+                        'won': bet_won,
+                        'bankroll': round(current_bankroll, 2)
+                    })
+        
+        # Calcular ROI por stake
+        for stake in range(1, 6):
+            if stakes_distribution[stake] > 0:
+                stakes_roi[stake] = (stakes_profit[stake] / (stakes_distribution[stake] * base_unit * stake)) * 100
+        
         predictions = np.array(predictions)
         y_test = np.array(y_test)
-
+        
+        # Calcular métricas
         correct = np.sum(predictions == y_test)
         accuracy = correct / len(y_test)
-
-        # Métricas por tipo de resultado
+        
+        # Métricas por tipo
         home_wins_total = np.sum(y_test == 2)
         draws_total = np.sum(y_test == 1)
         away_wins_total = np.sum(y_test == 0)
-
+        
         home_wins_correct = np.sum((predictions == 2) & (y_test == 2))
         draws_correct = np.sum((predictions == 1) & (y_test == 1))
         away_wins_correct = np.sum((predictions == 0) & (y_test == 0))
-
+        
         profit_loss = current_bankroll - initial_bankroll
         roi = (profit_loss / total_stakes * 100) if total_stakes > 0 else 0
-
-        # Calcular ROI por mercado
-        for market in market_stats:
-            if market_stats[market]['stakes'] > 0:
-                market_stats[market]['roi'] = round(
-                    (market_stats[market]['profit'] / market_stats[market]['stakes']) * 100, 2
-                )
-                market_stats[market]['win_rate'] = round(
-                    (market_stats[market]['wins'] / market_stats[market]['bets']) * 100, 1
-                ) if market_stats[market]['bets'] > 0 else 0
-
-        # Preparar resultados
+        
+        # Resultados
         results = {
             'test_metrics': {
                 'overall_accuracy': float(accuracy),
@@ -664,25 +558,25 @@ def main():
                 'win_rate': float(winning_bets / total_bets) if total_bets > 0 else 0,
                 'total_stakes': round(total_stakes, 2),
                 'avg_stake': round(total_stakes / total_bets, 2) if total_bets > 0 else 0,
-                'market_breakdown': market_stats,
                 'betting_criteria': {
-                    'min_value': value_config['min_value'],
-                    'min_confidence': value_config['min_confidence'],
-                    'min_odds': value_config['min_odds'],
-                    'max_odds': value_config['max_odds'],
-                    'base_unit': value_config['base_unit'],
-                    'exclude_draws': value_config['exclude_draws'],
-                    'include_over_under': value_config['include_over_under'],
-                    'include_asian_handicap': value_config['include_asian_handicap']
-                }
+                    'min_value': min_value,
+                    'min_confidence': min_confidence,
+                    'min_odds': min_odds,
+                    'max_odds': max_odds,
+                    'base_unit': base_unit
+                },
+                'stakes_distribution': stakes_distribution,
+                'stakes_roi': {k: round(v, 1) for k, v in stakes_roi.items()},
+                'stakes_profit': {k: round(v, 2) for k, v in stakes_profit.items()}
             },
-            'betting_details': all_betting_details
+            'betting_details': betting_details
         }
-
+        
         print(json.dumps(results))
+        
         cursor.close()
         conn.close()
-
+        
     except Exception as e:
         print(json.dumps({"error": str(e)}))
 
